@@ -56,29 +56,29 @@ enum DesktopGeometry {
   }
 
   static func fingerprint(for displays: [DisplayGeometry]) -> String {
-    displays
-      .sorted {
-        if $0.bounds.minX != $1.bounds.minX { return $0.bounds.minX < $1.bounds.minX }
-        if $0.bounds.minY != $1.bounds.minY { return $0.bounds.minY < $1.bounds.minY }
-        return $0.serial < $1.serial
-      }
-      .map { display in
-        [
-          String(display.vendor),
-          String(display.model),
-          String(display.serial),
-          display.isBuiltIn ? "built-in" : "external",
-          display.isMain ? "main" : "secondary",
-          String(Int(display.bounds.minX.rounded())),
-          String(Int(display.bounds.minY.rounded())),
-          String(Int(display.bounds.width.rounded())),
-          String(Int(display.bounds.height.rounded())),
-          String(display.pixelWidth),
-          String(display.pixelHeight),
-          String(display.rotation),
-        ].joined(separator: ":")
-      }
-      .joined(separator: "|")
+    let sortedDisplays = displays.sorted { left, right in
+      if left.bounds.minX != right.bounds.minX { return left.bounds.minX < right.bounds.minX }
+      if left.bounds.minY != right.bounds.minY { return left.bounds.minY < right.bounds.minY }
+      return left.serial < right.serial
+    }
+    let descriptions: [String] = sortedDisplays.map { display in
+      let fields = [
+        String(display.vendor),
+        String(display.model),
+        String(display.serial),
+        display.isBuiltIn ? "built-in" : "external",
+        display.isMain ? "main" : "secondary",
+        String(Int(display.bounds.minX.rounded())),
+        String(Int(display.bounds.minY.rounded())),
+        String(Int(display.bounds.width.rounded())),
+        String(Int(display.bounds.height.rounded())),
+        String(display.pixelWidth),
+        String(display.pixelHeight),
+        String(display.rotation),
+      ]
+      return fields.joined(separator: ":")
+    }
+    return descriptions.joined(separator: "|")
   }
 
   static func clamp(_ point: CGPoint, to rect: CGRect, inset: CGFloat = 8) -> CGPoint {
