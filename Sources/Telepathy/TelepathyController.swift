@@ -23,6 +23,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var latestFeatures: GazeFeatures?
   private var latestPrediction: GazePrediction?
   private var latestTarget: AccessibilityTarget?
+  private var focusConfirmationFrame: CGRect?
+  private var focusConfirmationTask: Task<Void, Never>?
   private var cameraState: CameraGazeTracker.State = .stopped
   private var statusItem: NSStatusItem?
   private var menu: NSMenu?
@@ -30,7 +32,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var enabled: Bool {
     didSet {
       UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
-      if !enabled { focusPolicy.resetCandidate() }
+      if !enabled {
+        focusPolicy.resetCandidate()
+        clearFocusConfirmation()
+      }
       refreshOverlay()
       refreshMenu()
       refreshControlPanel()
@@ -42,6 +47,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       UserDefaults.standard.set(debugOverlayEnabled, forKey: DefaultsKey.debugOverlay)
       refreshOverlay()
       refreshMenu()
+      refreshControlPanel()
     }
   }
 
@@ -79,6 +85,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   func stop() {
+    focusConfirmationTask?.cancel()
     camera.stop()
     mouseMonitor.stop()
   }
@@ -165,10 +172,13 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if warpPointer {
       mouseMonitor.prepareForCursorWarp(now: now)
     }
-    _ = accessibility.focus(
+    let focused = accessibility.focus(
       target,
       warpPointerTo: warpPointer ? prediction.smoothedPoint : nil
     )
+    if focused {
+      showFocusConfirmation(frame: target.metadata.frame)
+    }
   }
 
   private func learnFromClick(at point: CGPoint, now: TimeInterval) {
@@ -202,16 +212,38 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private func refreshOverlay() {
     overlay.isVisible = debugOverlayEnabled && enabled && latestPrediction != nil
     overlay.update(
-      rawPoint: latestPrediction?.rawPoint,
-      smoothedPoint: latestPrediction?.smoothedPoint,
-      targetFrame: latestTarget?.metadata.frame
+      gazePoint: latestPrediction?.smoothedPoint,
+      targetFrame: focusConfirmationFrame
     )
+  }
+
+  private func showFocusConfirmation(frame: CGRect) {
+    focusConfirmationTask?.cancel()
+    focusConfirmationFrame = frame
+    refreshOverlay()
+    focusConfirmationTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(1))
+      guard !Task.isCancelled else { return }
+      self?.focusConfirmationFrame = nil
+      self?.focusConfirmationTask = nil
+      self?.refreshOverlay()
+    }
+  }
+
+  private func clearFocusConfirmation() {
+    focusConfirmationTask?.cancel()
+    focusConfirmationTask = nil
+    focusConfirmationFrame = nil
   }
 
   private func configureControlPanel() {
     controlPanel.onEnabledChanged = { [weak self] isEnabled in
       guard let self, self.enabled != isEnabled else { return }
       self.enabled = isEnabled
+    }
+    controlPanel.onGazeIndicatorChanged = { [weak self] isEnabled in
+      guard let self, self.debugOverlayEnabled != isEnabled else { return }
+      self.debugOverlayEnabled = isEnabled
     }
     controlPanel.onRequestAccessibility = { [weak self] in
       self?.requestAccessibility()
@@ -268,7 +300,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     menu.addItem(enabledItem)
 
     let debugItem = NSMenuItem(
-      title: "Debug overlay", action: #selector(toggleDebugOverlay), keyEquivalent: "")
+      title: "Show gaze indicator", action: #selector(toggleDebugOverlay), keyEquivalent: "")
     debugItem.target = self
     debugItem.state = debugOverlayEnabled ? .on : .off
     menu.addItem(debugItem)
@@ -313,6 +345,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         enabled: enabled,
         status: "Camera stopped",
         detail: "Quit and reopen Telepathy to restart camera tracking.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .requestingPermission:
@@ -320,6 +353,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         enabled: enabled,
         status: "Waiting for Camera access",
         detail: "Allow Camera access in the macOS prompt to begin local tracking.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .denied:
@@ -327,6 +361,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         enabled: enabled,
         status: "Camera access needed",
         detail: "Enable Telepathy in System Settings > Privacy & Security > Camera.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .unavailable(let message):
@@ -334,6 +369,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         enabled: enabled,
         status: "Camera unavailable",
         detail: message,
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .running where !enabled:
@@ -342,6 +378,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Off",
         detail:
           "Camera estimation may continue locally, but focus and pointer movement are paused.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .running where !accessibility.isTrusted:
@@ -350,6 +387,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Accessibility access needed",
         detail:
           "Grant access once to the installed Telepathy app so it can focus windows and move the pointer.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: false
       )
     case .running where !mapper.isReady:
@@ -358,6 +396,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Learning from clicks",
         detail:
           "\(mapper.sampleCount)/\(AdaptiveGazeMapper.minimumSampleCount) samples. Look at a target as you click it across different desktop areas.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: true
       )
     case .running:
@@ -366,6 +405,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Tracking",
         detail:
           "Look at another visible window. Telepathy will focus it and move the pointer once.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
         accessibilityReady: true
       )
     }
@@ -420,6 +460,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     mapper.reset()
     latestPrediction = nil
     latestTarget = nil
+    clearFocusConfirmation()
     UserDefaults.standard.removeObject(forKey: DefaultsKey.calibrationSamples)
     refreshOverlay()
     refreshMenu()

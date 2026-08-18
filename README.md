@@ -13,7 +13,7 @@ crosses into another window. It does not continuously chase your eyes.
 
 - Native AVFoundation camera capture and Vision face, eye, and pupil landmarks.
 - Passive local calibration from ordinary mouse clicks.
-- A click-through debug overlay showing raw gaze, filtered gaze, and the target window.
+- A click-through gaze-area indicator with a one-second focus confirmation outline.
 - Direct macOS window activation through the Accessibility API.
 - One-time pointer relocation to the predicted gaze point after a focus transfer.
 - Physical mouse suppression, short anti-bounce timing, and `Command-Option-Escape` emergency pause.
@@ -46,9 +46,11 @@ moves the pointer once; keyboard and mouse input then work normally there.
 Physical mouse movement temporarily overrides gaze. Use the on/off switch or
 `Command-Option-Escape` to pause or resume at any time.
 
-The debug overlay is on by default while tracking. It contains only a gold gaze
-dot, a faint raw-estimate cross, and the candidate-window perimeter. Turn it off
-from the menu-bar eye when it is no longer useful.
+The gaze indicator is on by default while tracking. It uses a slowly filtered,
+thin gold ring to show the approximate area rather than pretending the webcam
+has pixel precision. A window outline appears only for one second after a focus
+transfer. Turn the indicator off in the Telepathy window or menu-bar eye at any
+time; focus tracking continues.
 
 For development, `./scripts/build-app.sh debug` produces `build/Telepathy.app`.
 Do not use that transient bundle as the everyday launch target.

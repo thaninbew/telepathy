@@ -43,6 +43,7 @@ The initial defaults are therefore filters rather than interaction steps:
 - Physical mouse quiet period: 280 ms.
 - Post-transfer cooldown: 240 ms.
 - Gaze smoothing: 72 percent newest sample, 28 percent previous sample.
+- Visual-indicator smoothing: 22 percent newest sample, 78 percent previous sample.
 
 These values are hypotheses. Debug sessions should measure false switches,
 missed switches, and time-to-focus before any number becomes product policy.
@@ -76,18 +77,47 @@ versions should combine:
 Calibration samples are stored locally in the app's user defaults. Camera
 frames are not stored or transmitted.
 
+### Display layouts
+
+The current runtime reads the active CoreGraphics displays whenever it maps a
+prediction, unions their real bounds, and uses macOS's configured relative
+positions. If the built-in display is arranged to the right of an external
+display, that offset is part of the coordinate space automatically. Screen
+changes also resize the overlay to the new desktop bounds.
+
+The present calibration is normalized to the combined desktop but is not yet
+keyed to a particular display layout. Reusing it after a display is moved,
+rotated, disconnected, or replaced can therefore be inaccurate even though the
+new bounds are detected correctly.
+
+The intended calibration flow is explicit and short, never an unsolicited
+full-screen ritual:
+
+1. The user chooses `Calibrate` from the control window, or accepts a quiet
+   suggestion when no profile matches the current display layout.
+2. Telepathy shows inset corners and a center target across every active
+   display, sampling stable head and pupil features at known coordinates.
+3. The sequence completes in roughly ten seconds and stores a profile keyed by
+   display identity, bounds, scale, and rotation.
+4. Ordinary clicks continue refining that profile opportunistically.
+
+Changing the layout selects another saved profile or offers calibration; it
+must not silently reuse a geometrically incompatible mapping.
+
 ## Debug experience
 
-The MVP intentionally ships with a visible, click-through overlay:
+The MVP intentionally ships with an optional, click-through gaze indicator:
 
-- A small gold marker is the filtered gaze estimate.
-- A faint neutral cross is the raw estimate.
-- A hairline gold perimeter identifies the candidate window.
+- A thin gold ring represents an approximate gaze area, with separate visual
+  smoothing so feedback can remain calm without slowing focus decisions.
+- A hairline gold perimeter confirms an actual focus transfer and disappears
+  after one second. It never remains around the current candidate window.
 
 The overlay never displays permission, setup, or status messages over the
 desktop. Those belong in the Telepathy control window and menu-bar menu. The
 overlay also disappears while Telepathy is off or before a calibrated estimate
-exists.
+exists. The user can disable the indicator independently while focus tracking
+continues.
 
 Visual direction: instrument / monochrome. The desktop remains the dominant
 surface; Telepathy adds one sparse warm-gold signal over neutral telemetry. The
@@ -97,8 +127,9 @@ The control window follows the same instrument / monochrome direction: warm
 ink surfaces, one gold state signal, compact native controls, and no decorative
 dashboard chrome. Its switch is the authoritative persistent on/off control.
 
-Normal mode should eventually remove the raw point and telemetry. The likely
-steady-state feedback is a brief, faint perimeter pulse only when focus moves.
+The likely steady-state feedback is the brief, faint perimeter confirmation
+only when focus moves; the gaze-area ring is primarily a calibration and debug
+instrument.
 
 ## Technical architecture
 
@@ -143,6 +174,15 @@ controls and exact text positions require better calibration and likely a
 stronger gaze model. Head direction should carry monitor selection; pupil
 features should refine the point inside that monitor. The debug overlay exists
 to expose rather than conceal this uncertainty.
+
+### Glasses and partial eye visibility
+
+Clear lenses can work normally, but glare, tinted lenses, thick frames, or a
+poor camera angle can obscure pupil landmarks. The current MVP requires both
+pupils and drops frames where Vision cannot identify them. A later fusion model
+should weight eye features by quality and fall back to head pose for coarse
+display or window selection rather than losing the entire frame. Calibration
+should be performed with the glasses and lighting the user normally uses.
 
 ### Focus semantics
 

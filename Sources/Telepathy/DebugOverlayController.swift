@@ -6,6 +6,7 @@ import Foundation
 final class DebugOverlayController {
   private let panel: NSPanel
   private let overlayView: DebugOverlayView
+  private var indicatorSmoother = GazeIndicatorSmoother()
   private var screenObserver: NSObjectProtocol?
 
   var isVisible = true {
@@ -53,19 +54,27 @@ final class DebugOverlayController {
   }
 
   func update(
-    rawPoint: CGPoint?,
-    smoothedPoint: CGPoint?,
+    gazePoint: CGPoint?,
     targetFrame: CGRect?
   ) {
+    let indicatorPoint: CGPoint?
+    if let gazePoint {
+      let appKitPoint = DesktopGeometry.appKitPoint(fromQuartz: gazePoint)
+      indicatorPoint = indicatorSmoother.update(with: appKitPoint)
+    } else {
+      indicatorSmoother.reset()
+      indicatorPoint = nil
+    }
+
     overlayView.snapshot = DebugOverlaySnapshot(
-      rawPoint: rawPoint.map(DesktopGeometry.appKitPoint(fromQuartz:)),
-      smoothedPoint: smoothedPoint.map(DesktopGeometry.appKitPoint(fromQuartz:)),
+      indicatorPoint: indicatorPoint,
       targetFrame: targetFrame.map(DesktopGeometry.appKitRect(fromQuartz:))
     )
     overlayView.needsDisplay = true
   }
 
   private func refreshDesktopFrame() {
+    indicatorSmoother.reset()
     let frame = DesktopGeometry.appKitBounds
     panel.setFrame(frame, display: true)
     overlayView.frame = CGRect(origin: .zero, size: frame.size)
@@ -81,15 +90,13 @@ final class DebugOverlayController {
 }
 
 private struct DebugOverlaySnapshot {
-  var rawPoint: CGPoint?
-  var smoothedPoint: CGPoint?
+  var indicatorPoint: CGPoint?
   var targetFrame: CGRect?
 }
 
 private final class DebugOverlayView: NSView {
   var snapshot = DebugOverlaySnapshot(
-    rawPoint: nil,
-    smoothedPoint: nil,
+    indicatorPoint: nil,
     targetFrame: nil
   )
 
@@ -106,11 +113,8 @@ private final class DebugOverlayView: NSView {
     if let targetFrame = snapshot.targetFrame {
       drawTargetWindow(globalFrame: targetFrame, context: context)
     }
-    if let rawPoint = snapshot.rawPoint {
-      drawRawSignal(globalPoint: rawPoint, context: context)
-    }
-    if let smoothedPoint = snapshot.smoothedPoint {
-      drawGazeMarker(globalPoint: smoothedPoint, context: context)
+    if let indicatorPoint = snapshot.indicatorPoint {
+      drawGazeIndicator(globalPoint: indicatorPoint, context: context)
     }
   }
 
@@ -151,39 +155,25 @@ private final class DebugOverlayView: NSView {
     context.strokePath()
   }
 
-  private func drawRawSignal(globalPoint: CGPoint, context: CGContext) {
+  private func drawGazeIndicator(globalPoint: CGPoint, context: CGContext) {
     let point = local(globalPoint)
-    context.setStrokeColor(OverlayStyle.rawSignal.cgColor)
-    context.setLineWidth(1)
-    context.move(to: CGPoint(x: point.x - 4, y: point.y))
-    context.addLine(to: CGPoint(x: point.x + 4, y: point.y))
-    context.move(to: CGPoint(x: point.x, y: point.y - 4))
-    context.addLine(to: CGPoint(x: point.x, y: point.y + 4))
-    context.strokePath()
-  }
-
-  private func drawGazeMarker(globalPoint: CGPoint, context: CGContext) {
-    let point = local(globalPoint)
-    let halo = CGRect(
-      x: point.x - OverlayStyle.markerHaloRadius,
-      y: point.y - OverlayStyle.markerHaloRadius,
-      width: OverlayStyle.markerHaloRadius * 2,
-      height: OverlayStyle.markerHaloRadius * 2
+    let area = CGRect(
+      x: point.x - OverlayStyle.indicatorRadius,
+      y: point.y - OverlayStyle.indicatorRadius,
+      width: OverlayStyle.indicatorRadius * 2,
+      height: OverlayStyle.indicatorRadius * 2
     )
-    context.setFillColor(OverlayStyle.accentFaint.cgColor)
-    context.fillEllipse(in: halo)
+    context.setStrokeColor(OverlayStyle.accentMuted.cgColor)
+    context.setLineWidth(OverlayStyle.indicatorLineWidth)
+    context.strokeEllipse(in: area)
 
-    let marker = CGRect(
-      x: point.x - OverlayStyle.markerRadius,
-      y: point.y - OverlayStyle.markerRadius,
-      width: OverlayStyle.markerRadius * 2,
-      height: OverlayStyle.markerRadius * 2
+    let center = CGRect(
+      x: point.x - OverlayStyle.indicatorCenterRadius,
+      y: point.y - OverlayStyle.indicatorCenterRadius,
+      width: OverlayStyle.indicatorCenterRadius * 2,
+      height: OverlayStyle.indicatorCenterRadius * 2
     )
     context.setFillColor(OverlayStyle.accent.cgColor)
-    context.fillEllipse(in: marker)
-    context.setStrokeColor(OverlayStyle.ink.cgColor)
-    context.setLineWidth(1)
-    context.strokeEllipse(in: marker)
+    context.fillEllipse(in: center)
   }
-
 }

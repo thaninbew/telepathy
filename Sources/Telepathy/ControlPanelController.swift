@@ -4,15 +4,18 @@ struct ControlPanelState: Equatable {
   let enabled: Bool
   let status: String
   let detail: String
+  let gazeIndicatorEnabled: Bool
   let accessibilityReady: Bool
 }
 
 @MainActor
 final class ControlPanelController: NSWindowController {
   var onEnabledChanged: ((Bool) -> Void)?
+  var onGazeIndicatorChanged: ((Bool) -> Void)?
   var onRequestAccessibility: (() -> Void)?
 
   private let powerSwitch = NSSwitch()
+  private let gazeIndicatorSwitch = NSSwitch()
   private let statusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
@@ -21,10 +24,11 @@ final class ControlPanelController: NSWindowController {
     target: nil,
     action: nil
   )
+  private var currentState: ControlPanelState?
 
   init() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 440, height: 420),
+      contentRect: NSRect(x: 0, y: 0, width: 440, height: 476),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -54,7 +58,10 @@ final class ControlPanelController: NSWindowController {
   }
 
   func update(_ state: ControlPanelState) {
+    guard state != currentState else { return }
+    currentState = state
     powerSwitch.state = state.enabled ? .on : .off
+    gazeIndicatorSwitch.state = state.gazeIndicatorEnabled ? .on : .off
     statusLabel.stringValue = state.status
     detailLabel.stringValue = state.detail
     permissionButton.isHidden = state.accessibilityReady
@@ -82,7 +89,7 @@ final class ControlPanelController: NSWindowController {
       root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -28),
     ])
 
-    for view in [makeHeader(), makePowerSection(), makeStatusSection(), makeGuide()] {
+    for view in [makeHeader(), makeControlsSection(), makeStatusSection(), makeGuide()] {
       root.addArrangedSubview(view)
       view.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
     }
@@ -133,36 +140,68 @@ final class ControlPanelController: NSWindowController {
     return header
   }
 
-  private func makePowerSection() -> NSView {
+  private func makeControlsSection() -> NSView {
     let section = PanelSectionView()
-    let title = makeLabel(
-      "Focus follows gaze",
-      font: .systemFont(ofSize: 16, weight: .semibold),
-      color: OverlayStyle.text
-    )
-    let explanation = makeLabel(
-      "Focus the window you look at and move the pointer once.",
-      font: .systemFont(ofSize: 12),
-      color: OverlayStyle.telemetry
-    )
-    explanation.maximumNumberOfLines = 2
-
-    let labels = NSStackView(views: [title, explanation])
-    labels.orientation = .vertical
-    labels.alignment = .leading
-    labels.spacing = OverlayStyle.space1
-
     powerSwitch.target = self
     powerSwitch.action = #selector(powerChanged)
     powerSwitch.setAccessibilityLabel("Focus follows gaze")
 
-    let row = NSStackView(views: [labels, powerSwitch])
+    gazeIndicatorSwitch.target = self
+    gazeIndicatorSwitch.action = #selector(gazeIndicatorChanged)
+    gazeIndicatorSwitch.setAccessibilityLabel("Show gaze indicator")
+
+    let divider = NSBox()
+    divider.boxType = .separator
+
+    let focusRow = makeToggleRow(
+      title: "Focus follows gaze",
+      explanation: "Focus the window you look at and move the pointer once.",
+      control: powerSwitch
+    )
+    let indicatorRow = makeToggleRow(
+      title: "Gaze indicator",
+      explanation: "Show a calm estimate area and a brief focus confirmation.",
+      control: gazeIndicatorSwitch
+    )
+    let stack = NSStackView(views: [focusRow, divider, indicatorRow])
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = OverlayStyle.space3
+    for view in [focusRow, divider, indicatorRow] {
+      view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    }
+    pin(stack, inside: section)
+    return section
+  }
+
+  private func makeToggleRow(
+    title: String,
+    explanation: String,
+    control: NSSwitch
+  ) -> NSView {
+    let titleLabel = makeLabel(
+      title,
+      font: .systemFont(ofSize: 16, weight: .semibold),
+      color: OverlayStyle.text
+    )
+    let explanationLabel = makeLabel(
+      explanation,
+      font: .systemFont(ofSize: 12),
+      color: OverlayStyle.telemetry
+    )
+    explanationLabel.maximumNumberOfLines = 2
+
+    let labels = NSStackView(views: [titleLabel, explanationLabel])
+    labels.orientation = .vertical
+    labels.alignment = .leading
+    labels.spacing = OverlayStyle.space1
+
+    let row = NSStackView(views: [labels, control])
     row.orientation = .horizontal
     row.alignment = .centerY
     row.distribution = .fill
     row.spacing = OverlayStyle.space4
-    pin(row, inside: section)
-    return section
+    return row
   }
 
   private func makeStatusSection() -> NSView {
@@ -260,6 +299,10 @@ final class ControlPanelController: NSWindowController {
 
   @objc private func powerChanged() {
     onEnabledChanged?(powerSwitch.state == .on)
+  }
+
+  @objc private func gazeIndicatorChanged() {
+    onGazeIndicatorChanged?(gazeIndicatorSwitch.state == .on)
   }
 
   @objc private func requestAccessibility() {
