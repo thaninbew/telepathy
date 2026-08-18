@@ -29,13 +29,23 @@ final class HeadDisplayClassifierTests: XCTestCase {
   func testRequiresSamplesForEveryActiveDisplay() {
     let classifier = HeadDisplayClassifier()
     let bounds = CGRect(x: 0, y: 0, width: 3000, height: 800)
-    let displays = (0..<3).map { index in
+    let displays: [ActiveDisplay] = [
       ActiveDisplay(
-        id: UInt32(index + 1),
-        bounds: CGRect(x: index * 1000, y: 0, width: 1000, height: 800),
-        visibleBounds: CGRect(x: index * 1000, y: 0, width: 1000, height: 760)
-      )
-    }
+        id: 1,
+        bounds: CGRect(x: 0, y: 0, width: 1000, height: 800),
+        visibleBounds: CGRect(x: 0, y: 0, width: 1000, height: 760)
+      ),
+      ActiveDisplay(
+        id: 2,
+        bounds: CGRect(x: 1000, y: 0, width: 1000, height: 800),
+        visibleBounds: CGRect(x: 1000, y: 0, width: 1000, height: 760)
+      ),
+      ActiveDisplay(
+        id: 3,
+        bounds: CGRect(x: 2000, y: 0, width: 1000, height: 800),
+        visibleBounds: CGRect(x: 2000, y: 0, width: 1000, height: 760)
+      ),
+    ]
     let samples = [
       sample(faceX: 0.42, yaw: -0.25, x: 0.15, y: 0.5),
       sample(faceX: 0.58, yaw: 0.28, x: 0.50, y: 0.5),
