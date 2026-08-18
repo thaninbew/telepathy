@@ -20,6 +20,9 @@ enum OverlayStyle {
   static let indicatorRadius: CGFloat = 24
   static let indicatorCenterRadius: CGFloat = 2
   static let indicatorLineWidth: CGFloat = 1.25
+  static let calibrationTargetRadius: CGFloat = 18
+  static let calibrationHaloRadius: CGFloat = 32
+  static let calibrationBackdrop = background.withAlphaComponent(0.84)
   static let windowCornerRadius: CGFloat = 10
   static let panelCornerRadius: CGFloat = 16
   static let space1: CGFloat = 4

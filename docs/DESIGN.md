@@ -83,19 +83,27 @@ active typing wins for longer, and an explicit focus lock wins until released.
 
 ## Calibration
 
-The MVP learns passively from ordinary clicks. At mouse-down time, the pointer
-location is a useful label for the most recent head and pupil features. A small
-ridge-regression model maps those features into normalized coordinates across
-the combined desktop.
+Calibration is intentional and user-triggered. Telepathy presents the center
+and four inset corners of every active display, captures two recent
+head-and-pupil samples per target, and fits a small ridge-regression model over
+the combined desktop. Focus transfer pauses during the sequence. Escape cancels
+without touching the previous profile, and a new profile is committed only if
+the fitted model passes the same readiness checks used during tracking.
 
-Passive learning makes the app useful without a ritual, but the assumption is
-not always true: people sometimes click while looking elsewhere. Future
-versions should combine:
+Profiles are stored locally in user defaults under a fingerprint of the active
+display identities, bounds, resolution, rotation, and main-display assignment.
+They survive app restarts. A known arrangement restores its own profile; an
+unknown arrangement leaves focus inactive and offers calibration rather than
+silently applying incompatible geometry.
+
+Ordinary clicks continue refining the active profile. At mouse-down time, the
+pointer location is a useful label for the most recent head and pupil features,
+but it is supplementary because people sometimes click while looking elsewhere.
+Future versions should add:
 
 - Robust outlier rejection.
-- Per-display models.
-- Opportunistic labels from clicks and text-caret placement.
-- A short explicit calibration only when passive confidence is insufficient.
+- Robust per-display residual correction on top of the layout profile.
+- Opportunistic labels from text-caret placement and other high-confidence actions.
 - Drift detection for posture, lighting, camera position, and display changes.
 
 Calibration samples are stored locally in the app's user defaults. Camera
@@ -109,19 +117,14 @@ positions. If the built-in display is arranged to the right of an external
 display, that offset is part of the coordinate space automatically. Screen
 changes also resize the overlay to the new desktop bounds.
 
-The present calibration is normalized to the combined desktop but is not yet
-keyed to a particular display layout. Reusing it after a display is moved,
-rotated, disconnected, or replaced can therefore be inaccurate even though the
-new bounds are detected correctly.
-
-The intended calibration flow is explicit and short, never an unsolicited
-full-screen ritual:
+The calibration flow is explicit and short, never an unsolicited full-screen
+ritual:
 
 1. The user chooses `Calibrate` from the control window, or accepts a quiet
    suggestion when no profile matches the current display layout.
 2. Telepathy shows inset corners and a center target across every active
    display, sampling stable head and pupil features at known coordinates.
-3. The sequence completes in roughly ten seconds and stores a profile keyed by
+3. The sequence completes in several seconds and stores a profile keyed by
    display identity, bounds, scale, and rotation.
 4. Ordinary clicks continue refining that profile opportunistically.
 
@@ -158,6 +161,9 @@ The MVP intentionally ships with an optional, click-through gaze indicator:
   smoothing so feedback can remain calm without slowing focus decisions.
 - A hairline gold perimeter confirms an actual focus transfer and disappears
   after one second. It never remains around the current candidate window.
+- Each active display owns its own transparent AppKit panel. A single panel
+  stretched across the combined desktop is not reliable across macOS displays
+  and Spaces.
 
 The overlay never displays permission, setup, or status messages over the
 desktop. Those belong in the Telepathy control window and menu-bar menu. The

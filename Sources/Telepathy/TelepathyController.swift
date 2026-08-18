@@ -9,15 +9,16 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     static let enabled = "telepathy.enabled"
     static let debugOverlay = "telepathy.debugOverlay"
     static let warpPointer = "telepathy.warpPointer"
-    static let calibrationSamples = "telepathy.calibrationSamples.v1"
   }
 
   private let camera = CameraGazeTracker()
   private let mouseMonitor = MouseActivityMonitor()
   private let accessibility = AccessibilityWindowController()
   private let mapper = AdaptiveGazeMapper()
+  private let calibrationStore = CalibrationProfileStore()
   private let overlay = DebugOverlayController()
   private lazy var controlPanel = ControlPanelController()
+  private lazy var calibrationOverlay = CalibrationOverlayController()
   private var focusPolicy = FocusPolicy()
 
   private var latestFeatures: GazeFeatures?
@@ -25,6 +26,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var latestTarget: AccessibilityTarget?
   private var focusConfirmationFrame: CGRect?
   private var focusConfirmationTask: Task<Void, Never>?
+  private var currentLayoutFingerprint = DesktopGeometry.layoutFingerprint
+  private var displayObserver: NSObjectProtocol?
+  private var isCalibrating = false
   private var cameraState: CameraGazeTracker.State = .stopped
   private var statusItem: NSStatusItem?
   private var menu: NSMenu?
@@ -70,7 +74,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   func start() {
     configureStatusItem()
     configureControlPanel()
+    configureCalibration()
     configureCallbacks()
+    configureDisplayObserver()
 
     if accessibility.isTrusted {
       _ = mouseMonitor.start()
@@ -86,6 +92,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   func stop() {
     focusConfirmationTask?.cancel()
+    calibrationOverlay.stop()
     camera.stop()
     mouseMonitor.stop()
   }
@@ -116,6 +123,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if accessibility.isTrusted, !mouseMonitor.isRunning {
       _ = mouseMonitor.start()
     }
+
+    guard !isCalibrating else { return }
 
     guard let rawPoint = mapper.predict(features: features, desktopBounds: bounds) else {
       latestPrediction = nil
@@ -153,6 +162,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private func transferFocusIfNeeded(now: TimeInterval) {
     guard enabled,
+      !isCalibrating,
       accessibility.isTrusted,
       let prediction = latestPrediction,
       let target = latestTarget
@@ -182,7 +192,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func learnFromClick(at point: CGPoint, now: TimeInterval) {
-    guard let features = latestFeatures,
+    guard !isCalibrating,
+      let features = latestFeatures,
       now - features.timestamp <= 0.25,
       features.confidence >= 0.35
     else {
@@ -196,21 +207,18 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func restoreCalibration() {
-    guard let data = UserDefaults.standard.data(forKey: DefaultsKey.calibrationSamples),
-      let samples = try? JSONDecoder().decode([CalibrationSample].self, from: data)
-    else {
-      return
-    }
+    mapper.reset()
+    guard let samples = calibrationStore.load(layout: currentLayoutFingerprint) else { return }
     mapper.restore(samples: samples)
   }
 
   private func persistCalibration() {
-    guard let data = try? JSONEncoder().encode(mapper.samples) else { return }
-    UserDefaults.standard.set(data, forKey: DefaultsKey.calibrationSamples)
+    calibrationStore.save(samples: mapper.samples, layout: currentLayoutFingerprint)
   }
 
   private func refreshOverlay() {
-    overlay.isVisible = debugOverlayEnabled && enabled && latestPrediction != nil
+    overlay.isVisible =
+      debugOverlayEnabled && enabled && !isCalibrating && latestPrediction != nil
     overlay.update(
       gazePoint: latestPrediction?.smoothedPoint,
       targetFrame: focusConfirmationFrame
@@ -247,6 +255,36 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
     controlPanel.onRequestAccessibility = { [weak self] in
       self?.requestAccessibility()
+    }
+    controlPanel.onCalibrate = { [weak self] in
+      self?.beginCalibration()
+    }
+  }
+
+  private func configureCalibration() {
+    calibrationOverlay.onCapture = { [weak self] point in
+      self?.calibrationSample(at: point)
+    }
+    calibrationOverlay.onComplete = { [weak self] samples in
+      self?.completeCalibration(with: samples)
+    }
+    calibrationOverlay.onCancel = { [weak self] in
+      self?.finishCalibration()
+    }
+    calibrationOverlay.onFailure = { [weak self] message in
+      self?.failCalibration(message: message)
+    }
+  }
+
+  private func configureDisplayObserver() {
+    displayObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        self?.handleDisplayChange()
+      }
     }
   }
 
@@ -313,6 +351,15 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
     menu.addItem(.separator())
 
+    let calibrationItem = NSMenuItem(
+      title: mapper.isReady ? "Recalibrate…" : "Calibrate…",
+      action: #selector(beginCalibration),
+      keyEquivalent: ""
+    )
+    calibrationItem.target = self
+    calibrationItem.isEnabled = cameraState == .running && !isCalibrating
+    menu.addItem(calibrationItem)
+
     if !accessibility.isTrusted {
       let permissionItem = NSMenuItem(
         title: "Request Accessibility access…", action: #selector(requestAccessibility),
@@ -322,7 +369,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
 
     let resetItem = NSMenuItem(
-      title: "Reset learned calibration…", action: #selector(resetCalibration), keyEquivalent: "")
+      title: "Reset current calibration…", action: #selector(resetCalibration), keyEquivalent: "")
     resetItem.target = self
     resetItem.isEnabled = mapper.sampleCount > 0
     menu.addItem(resetItem)
@@ -338,6 +385,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func refreshControlPanel() {
+    let calibrationTitle = mapper.isReady ? "Recalibrate…" : "Calibrate…"
+    let calibrationEnabled = cameraState == .running && !isCalibrating
     let state: ControlPanelState
     switch cameraState {
     case .stopped:
@@ -346,6 +395,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Camera stopped",
         detail: "Quit and reopen Telepathy to restart camera tracking.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .requestingPermission:
@@ -354,6 +405,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Waiting for Camera access",
         detail: "Allow Camera access in the macOS prompt to begin local tracking.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .denied:
@@ -362,6 +415,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Camera access needed",
         detail: "Enable Telepathy in System Settings > Privacy & Security > Camera.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .unavailable(let message):
@@ -370,6 +425,19 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         status: "Camera unavailable",
         detail: message,
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .running where isCalibrating:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Calibrating",
+        detail:
+          "Follow the gold target across \(calibrationOverlay.displayCount) active displays. Press Esc to cancel.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: "Calibrating…",
+        calibrationEnabled: false,
         accessibilityReady: accessibility.isTrusted
       )
     case .running where !enabled:
@@ -379,6 +447,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         detail:
           "Camera estimation may continue locally, but focus and pointer movement are paused.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: accessibility.isTrusted
       )
     case .running where !accessibility.isTrusted:
@@ -388,15 +458,19 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         detail:
           "Grant access once to the installed Telepathy app so it can focus windows and move the pointer.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: false
       )
     case .running where !mapper.isReady:
       state = ControlPanelState(
         enabled: enabled,
-        status: "Learning from clicks",
+        status: "Calibration needed",
         detail:
-          "\(mapper.sampleCount)/\(AdaptiveGazeMapper.minimumSampleCount) samples. Look at a target as you click it across different desktop areas.",
+          "Run Calibrate for the current screens. Ordinary clicks can still refine the saved profile.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: true
       )
     case .running:
@@ -406,6 +480,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         detail:
           "Look at another visible window. Telepathy will focus it and move the pointer once.",
         gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: calibrationEnabled,
         accessibilityReady: true
       )
     }
@@ -418,11 +494,83 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     case .requestingPermission: "Waiting for Camera permission"
     case .denied: "Camera permission denied"
     case .unavailable(let message): "Camera unavailable: \(message)"
+    case .running where isCalibrating: "Calibrating gaze"
     case .running where !accessibility.isTrusted: "Accessibility permission required"
     case .running where !mapper.isReady:
-      "Learning gaze: \(mapper.sampleCount)/\(AdaptiveGazeMapper.minimumSampleCount) samples"
+      "Calibration needed for this display layout"
     case .running where !enabled: "Paused"
     case .running: "Tracking gaze"
+    }
+  }
+
+  private func calibrationSample(at point: CGPoint) -> CalibrationSample? {
+    guard let features = latestFeatures,
+      ProcessInfo.processInfo.systemUptime - features.timestamp <= 0.3,
+      features.confidence >= 0.35
+    else {
+      return nil
+    }
+    return AdaptiveGazeMapper.makeSample(
+      features: features,
+      point: point,
+      desktopBounds: DesktopGeometry.quartzBounds
+    )
+  }
+
+  private func completeCalibration(with samples: [CalibrationSample]) {
+    let candidate = AdaptiveGazeMapper()
+    candidate.restore(samples: samples)
+    guard candidate.isReady else {
+      failCalibration(
+        message:
+          "The samples did not produce a reliable desktop map. Keep your face visible and try again."
+      )
+      return
+    }
+
+    mapper.restore(samples: samples)
+    persistCalibration()
+    finishCalibration()
+  }
+
+  private func finishCalibration() {
+    isCalibrating = false
+    latestPrediction = nil
+    latestTarget = nil
+    clearFocusConfirmation()
+    refreshOverlay()
+    refreshMenu()
+    refreshControlPanel()
+    controlPanel.present()
+  }
+
+  private func failCalibration(message: String) {
+    finishCalibration()
+    let alert = NSAlert()
+    alert.messageText = "Calibration did not finish"
+    alert.informativeText = message
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+  }
+
+  private func handleDisplayChange() {
+    let fingerprint = DesktopGeometry.layoutFingerprint
+    guard fingerprint != currentLayoutFingerprint else { return }
+
+    if calibrationOverlay.isRunning {
+      calibrationOverlay.cancel()
+    }
+    currentLayoutFingerprint = fingerprint
+    restoreCalibration()
+    latestPrediction = nil
+    latestTarget = nil
+    clearFocusConfirmation()
+    refreshOverlay()
+    refreshMenu()
+    refreshControlPanel()
+    if !mapper.isReady {
+      controlPanel.present()
     }
   }
 
@@ -438,6 +586,29 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     warpPointer.toggle()
   }
 
+  @objc private func beginCalibration() {
+    guard cameraState == .running, !isCalibrating else { return }
+
+    let displays = calibrationOverlay.displayCount
+    let alert = NSAlert()
+    alert.messageText = mapper.isReady ? "Recalibrate Telepathy?" : "Calibrate Telepathy?"
+    alert.informativeText =
+      "A gold target will move through the center and corners of \(displays) active \(displays == 1 ? "display" : "displays"). Look naturally at each target. The current calibration stays saved if you cancel."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Start")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+    isCalibrating = true
+    focusPolicy.resetCandidate()
+    clearFocusConfirmation()
+    controlPanel.dismiss()
+    refreshOverlay()
+    refreshMenu()
+    refreshControlPanel()
+    calibrationOverlay.start()
+  }
+
   @objc private func requestAccessibility() {
     accessibility.openTrustSettings()
     refreshMenu()
@@ -450,8 +621,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   @objc private func resetCalibration() {
     let alert = NSAlert()
-    alert.messageText = "Reset gaze calibration?"
-    alert.informativeText = "Telepathy will relearn from your next clicks."
+    alert.messageText = "Reset calibration for this display layout?"
+    alert.informativeText = "Other saved display layouts will not be changed."
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Reset")
     alert.addButton(withTitle: "Cancel")
@@ -461,7 +632,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     latestPrediction = nil
     latestTarget = nil
     clearFocusConfirmation()
-    UserDefaults.standard.removeObject(forKey: DefaultsKey.calibrationSamples)
+    calibrationStore.remove(layout: currentLayoutFingerprint)
     refreshOverlay()
     refreshMenu()
     refreshControlPanel()

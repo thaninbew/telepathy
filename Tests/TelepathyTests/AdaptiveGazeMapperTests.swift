@@ -40,6 +40,36 @@ final class AdaptiveGazeMapperTests: XCTestCase {
     XCTAssertFalse(mapper.isReady)
   }
 
+  func testIntentionalFiveTargetSequenceProducesReadyModel() {
+    let mapper = AdaptiveGazeMapper()
+    let bounds = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+    let points = CalibrationTargetPlanner.points(in: bounds)
+    var samples: [CalibrationSample] = []
+
+    for (index, point) in points.enumerated() {
+      let x = Double(point.x / bounds.width)
+      let y = Double(point.y / bounds.height)
+      for repetition in 0..<2 {
+        let features = makeFeatures(
+          x: x + Double(repetition) * 0.002,
+          y: y + Double(repetition) * 0.002,
+          timestamp: Double(index * 2 + repetition)
+        )
+        samples.append(
+          AdaptiveGazeMapper.makeSample(
+            features: features,
+            point: point,
+            desktopBounds: bounds
+          )!
+        )
+      }
+    }
+
+    mapper.restore(samples: samples)
+    XCTAssertTrue(mapper.isReady)
+    XCTAssertEqual(mapper.sampleCount, 10)
+  }
+
   private func makeFeatures(x: Double, y: Double, timestamp: TimeInterval) -> GazeFeatures {
     GazeFeatures(
       timestamp: timestamp,

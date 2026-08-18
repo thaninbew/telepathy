@@ -12,7 +12,8 @@ crosses into another window. It does not continuously chase your eyes.
 ## Current MVP
 
 - Native AVFoundation camera capture and Vision face, eye, and pupil landmarks.
-- Passive local calibration from ordinary mouse clicks.
+- Intentional corners-and-center calibration across every active display.
+- Saved calibration profiles keyed to the current display arrangement, with passive click refinement.
 - A click-through gaze-area indicator with a one-second focus confirmation outline.
 - Direct macOS window activation through the Accessibility API.
 - One-time pointer relocation to the predicted gaze point after a focus transfer.
@@ -39,18 +40,24 @@ is deliberate: Telepathy never throws an Accessibility message over the
 desktop. Because local builds are signed ad hoc, installing a new build can
 require granting access again; simply reopening the installed app should not.
 
-Telepathy initially learns from clicks. Look at each target as you click it and
-use at least ten targets spread across the desktop. When the control window says
-`Tracking`, look at another visible window. Telepathy focuses that window and
-moves the pointer once; keyboard and mouse input then work normally there.
-Physical mouse movement temporarily overrides gaze. Use the on/off switch or
-`Command-Option-Escape` to pause or resume at any time.
+Choose `Calibrate…` in the Telepathy window or menu-bar eye. A gold target moves
+through the center and corners of every active display for several seconds; look
+naturally at each target. The resulting profile is saved for that exact display
+arrangement and restored after relaunch. `Recalibrate…` replaces it only after a
+successful run, while Escape cancels without losing the previous profile.
+Ordinary clicks continue refining the active profile.
+
+When the control window says `Tracking`, look at another visible window.
+Telepathy focuses that window and moves the pointer once; keyboard and mouse
+input then work normally there. Physical mouse movement temporarily overrides
+gaze. Use the on/off switch or `Command-Option-Escape` to pause or resume.
 
 The gaze indicator is on by default while tracking. It uses a slowly filtered,
 thin gold ring to show the approximate area rather than pretending the webcam
 has pixel precision. A window outline appears only for one second after a focus
 transfer. Turn the indicator off in the Telepathy window or menu-bar eye at any
-time; focus tracking continues.
+time; focus tracking continues. Telepathy uses a separate transparent overlay
+panel for each active display so the indicator can appear on every screen.
 
 For development, `./scripts/build-app.sh debug` produces `build/Telepathy.app`.
 Do not use that transient bundle as the everyday launch target.

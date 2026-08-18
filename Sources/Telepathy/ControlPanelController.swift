@@ -5,6 +5,8 @@ struct ControlPanelState: Equatable {
   let status: String
   let detail: String
   let gazeIndicatorEnabled: Bool
+  let calibrationButtonTitle: String
+  let calibrationEnabled: Bool
   let accessibilityReady: Bool
 }
 
@@ -12,6 +14,7 @@ struct ControlPanelState: Equatable {
 final class ControlPanelController: NSWindowController {
   var onEnabledChanged: ((Bool) -> Void)?
   var onGazeIndicatorChanged: ((Bool) -> Void)?
+  var onCalibrate: (() -> Void)?
   var onRequestAccessibility: (() -> Void)?
 
   private let powerSwitch = NSSwitch()
@@ -24,6 +27,7 @@ final class ControlPanelController: NSWindowController {
     target: nil,
     action: nil
   )
+  private let calibrationButton = NSButton(title: "Calibrate…", target: nil, action: nil)
   private var currentState: ControlPanelState?
 
   init() {
@@ -57,6 +61,10 @@ final class ControlPanelController: NSWindowController {
     window.makeKeyAndOrderFront(nil)
   }
 
+  func dismiss() {
+    window?.orderOut(nil)
+  }
+
   func update(_ state: ControlPanelState) {
     guard state != currentState else { return }
     currentState = state
@@ -64,6 +72,8 @@ final class ControlPanelController: NSWindowController {
     gazeIndicatorSwitch.state = state.gazeIndicatorEnabled ? .on : .off
     statusLabel.stringValue = state.status
     detailLabel.stringValue = state.detail
+    calibrationButton.title = state.calibrationButtonTitle
+    calibrationButton.isEnabled = state.calibrationEnabled
     permissionButton.isHidden = state.accessibilityReady
     statusDot.color =
       state.enabled && state.accessibilityReady
@@ -241,7 +251,19 @@ final class ControlPanelController: NSWindowController {
     permissionButton.contentTintColor = OverlayStyle.accent
     permissionButton.controlSize = .large
 
-    let stack = NSStackView(views: [eyebrow, statusRow, detailLabel, permissionButton])
+    calibrationButton.target = self
+    calibrationButton.action = #selector(calibrate)
+    calibrationButton.bezelStyle = .rounded
+    calibrationButton.contentTintColor = OverlayStyle.accent
+    calibrationButton.controlSize = .large
+    calibrationButton.setAccessibilityLabel("Calibrate gaze tracking")
+
+    let actions = NSStackView(views: [permissionButton, calibrationButton])
+    actions.orientation = .horizontal
+    actions.alignment = .centerY
+    actions.spacing = OverlayStyle.space2
+
+    let stack = NSStackView(views: [eyebrow, statusRow, detailLabel, actions])
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = OverlayStyle.space2
@@ -251,7 +273,7 @@ final class ControlPanelController: NSWindowController {
 
   private func makeGuide() -> NSView {
     let text = """
-      1  Look at what you click across several desktop areas.
+      1  Calibrate and follow targets across every screen.
       2  When status says Tracking, look at another window.
       3  Move the physical mouse whenever you want manual control.
       """
@@ -303,6 +325,10 @@ final class ControlPanelController: NSWindowController {
 
   @objc private func gazeIndicatorChanged() {
     onGazeIndicatorChanged?(gazeIndicatorSwitch.state == .on)
+  }
+
+  @objc private func calibrate() {
+    onCalibrate?()
   }
 
   @objc private func requestAccessibility() {

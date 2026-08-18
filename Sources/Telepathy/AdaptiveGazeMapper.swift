@@ -13,21 +13,17 @@ final class AdaptiveGazeMapper {
   var isReady: Bool { xWeights != nil && yWeights != nil }
 
   func addSample(features: GazeFeatures, point: CGPoint, desktopBounds: CGRect) {
-    guard desktopBounds.width > 0, desktopBounds.height > 0 else { return }
-
-    let normalizedX = Double((point.x - desktopBounds.minX) / desktopBounds.width)
-    let normalizedY = Double((point.y - desktopBounds.minY) / desktopBounds.height)
-    guard normalizedX.isFinite, normalizedY.isFinite else { return }
-
-    let sample = CalibrationSample(
-      features: features,
-      normalizedX: normalizedX,
-      normalizedY: normalizedY
-    )
+    guard
+      let sample = Self.makeSample(
+        features: features,
+        point: point,
+        desktopBounds: desktopBounds
+      )
+    else { return }
 
     if let last = samples.last {
-      let dx = last.normalizedX - normalizedX
-      let dy = last.normalizedY - normalizedY
+      let dx = last.normalizedX - sample.normalizedX
+      let dy = last.normalizedY - sample.normalizedY
       let featureDelta = zip(last.features.vector, features.vector)
         .map { abs($0 - $1) }
         .reduce(0, +)
@@ -41,6 +37,24 @@ final class AdaptiveGazeMapper {
       samples.removeFirst(samples.count - Self.maximumSampleCount)
     }
     refit()
+  }
+
+  static func makeSample(
+    features: GazeFeatures,
+    point: CGPoint,
+    desktopBounds: CGRect
+  ) -> CalibrationSample? {
+    guard desktopBounds.width > 0, desktopBounds.height > 0 else { return nil }
+
+    let normalizedX = Double((point.x - desktopBounds.minX) / desktopBounds.width)
+    let normalizedY = Double((point.y - desktopBounds.minY) / desktopBounds.height)
+    guard normalizedX.isFinite, normalizedY.isFinite else { return nil }
+
+    return CalibrationSample(
+      features: features,
+      normalizedX: normalizedX,
+      normalizedY: normalizedY
+    )
   }
 
   func predict(features: GazeFeatures, desktopBounds: CGRect) -> CGPoint? {

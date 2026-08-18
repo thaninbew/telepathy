@@ -4,10 +4,15 @@ import Foundation
 
 @MainActor
 final class DebugOverlayController {
-  private let panel: NSPanel
-  private let overlayView: DebugOverlayView
+  private struct Surface {
+    let panel: NSPanel
+    let view: DebugOverlayView
+  }
+
+  private var surfaces: [Surface] = []
   private var indicatorSmoother = GazeIndicatorSmoother()
   private var screenObserver: NSObjectProtocol?
+  private var snapshot = DebugOverlaySnapshot(indicatorPoint: nil, targetFrame: nil)
 
   var isVisible = true {
     didSet {
@@ -17,26 +22,7 @@ final class DebugOverlayController {
   }
 
   init() {
-    let frame = DesktopGeometry.appKitBounds
-    overlayView = DebugOverlayView(frame: CGRect(origin: .zero, size: frame.size))
-    panel = NSPanel(
-      contentRect: frame,
-      styleMask: [.borderless, .nonactivatingPanel],
-      backing: .buffered,
-      defer: false
-    )
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = false
-    panel.ignoresMouseEvents = true
-    panel.hidesOnDeactivate = false
-    panel.level = .statusBar
-    panel.collectionBehavior = [
-      .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
-    ]
-    panel.contentView = overlayView
-    panel.setAccessibilityElement(false)
-    overlayView.setAccessibilityElement(false)
+    rebuildSurfaces()
 
     screenObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.didChangeScreenParametersNotification,
@@ -44,7 +30,7 @@ final class DebugOverlayController {
       queue: .main
     ) { [weak self] _ in
       Task { @MainActor [weak self] in
-        self?.refreshDesktopFrame()
+        self?.rebuildSurfaces()
       }
     }
   }
@@ -66,25 +52,56 @@ final class DebugOverlayController {
       indicatorPoint = nil
     }
 
-    overlayView.snapshot = DebugOverlaySnapshot(
+    snapshot = DebugOverlaySnapshot(
       indicatorPoint: indicatorPoint,
       targetFrame: targetFrame.map(DesktopGeometry.appKitRect(fromQuartz:))
     )
-    overlayView.needsDisplay = true
+    applySnapshot()
   }
 
-  private func refreshDesktopFrame() {
+  private func rebuildSurfaces() {
     indicatorSmoother.reset()
-    let frame = DesktopGeometry.appKitBounds
-    panel.setFrame(frame, display: true)
-    overlayView.frame = CGRect(origin: .zero, size: frame.size)
+    surfaces.forEach { $0.panel.orderOut(nil) }
+    surfaces = NSScreen.screens.map { screen in
+      let view = DebugOverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
+      let panel = NSPanel(
+        contentRect: screen.frame,
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false,
+        screen: screen
+      )
+      panel.setFrame(screen.frame, display: false)
+      panel.isOpaque = false
+      panel.backgroundColor = .clear
+      panel.hasShadow = false
+      panel.ignoresMouseEvents = true
+      panel.hidesOnDeactivate = false
+      panel.level = .statusBar
+      panel.collectionBehavior = [
+        .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
+      ]
+      panel.contentView = view
+      panel.setAccessibilityElement(false)
+      view.setAccessibilityElement(false)
+      return Surface(panel: panel, view: view)
+    }
+    applySnapshot()
+    updateVisibility()
+  }
+
+  private func applySnapshot() {
+    for surface in surfaces {
+      surface.view.snapshot = snapshot
+      surface.view.needsDisplay = true
+    }
   }
 
   private func updateVisibility() {
     if isVisible {
-      panel.orderFrontRegardless()
+      surfaces.forEach { $0.panel.orderFrontRegardless() }
     } else {
-      panel.orderOut(nil)
+      surfaces.forEach { $0.panel.orderOut(nil) }
     }
   }
 }

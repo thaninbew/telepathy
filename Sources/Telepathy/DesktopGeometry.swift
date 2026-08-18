@@ -1,6 +1,18 @@
 import AppKit
 import CoreGraphics
 
+struct DisplayGeometry: Equatable {
+  let vendor: UInt32
+  let model: UInt32
+  let serial: UInt32
+  let isBuiltIn: Bool
+  let isMain: Bool
+  let bounds: CGRect
+  let pixelWidth: Int
+  let pixelHeight: Int
+  let rotation: Int
+}
+
 enum DesktopGeometry {
   static var quartzBounds: CGRect {
     var count: UInt32 = 0
@@ -22,6 +34,10 @@ enum DesktopGeometry {
     appKitRect(fromQuartz: quartzBounds)
   }
 
+  static var layoutFingerprint: String {
+    fingerprint(for: activeDisplayGeometry)
+  }
+
   static func appKitPoint(fromQuartz point: CGPoint) -> CGPoint {
     CGPoint(x: point.x, y: primaryDisplayHeight - point.y)
   }
@@ -35,6 +51,36 @@ enum DesktopGeometry {
     )
   }
 
+  static func quartzPoint(fromAppKit point: CGPoint) -> CGPoint {
+    CGPoint(x: point.x, y: primaryDisplayHeight - point.y)
+  }
+
+  static func fingerprint(for displays: [DisplayGeometry]) -> String {
+    displays
+      .sorted {
+        if $0.bounds.minX != $1.bounds.minX { return $0.bounds.minX < $1.bounds.minX }
+        if $0.bounds.minY != $1.bounds.minY { return $0.bounds.minY < $1.bounds.minY }
+        return $0.serial < $1.serial
+      }
+      .map { display in
+        [
+          String(display.vendor),
+          String(display.model),
+          String(display.serial),
+          display.isBuiltIn ? "built-in" : "external",
+          display.isMain ? "main" : "secondary",
+          String(Int(display.bounds.minX.rounded())),
+          String(Int(display.bounds.minY.rounded())),
+          String(Int(display.bounds.width.rounded())),
+          String(Int(display.bounds.height.rounded())),
+          String(display.pixelWidth),
+          String(display.pixelHeight),
+          String(display.rotation),
+        ].joined(separator: ":")
+      }
+      .joined(separator: "|")
+  }
+
   static func clamp(_ point: CGPoint, to rect: CGRect, inset: CGFloat = 8) -> CGPoint {
     let safe = rect.insetBy(dx: min(inset, rect.width / 4), dy: min(inset, rect.height / 4))
     return CGPoint(
@@ -45,5 +91,27 @@ enum DesktopGeometry {
 
   private static var primaryDisplayHeight: CGFloat {
     CGDisplayBounds(CGMainDisplayID()).height
+  }
+
+  private static var activeDisplayGeometry: [DisplayGeometry] {
+    var count: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+
+    var displays = Array(repeating: CGDirectDisplayID(), count: Int(count))
+    guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return [] }
+
+    return displays.prefix(Int(count)).map { display in
+      DisplayGeometry(
+        vendor: CGDisplayVendorNumber(display),
+        model: CGDisplayModelNumber(display),
+        serial: CGDisplaySerialNumber(display),
+        isBuiltIn: CGDisplayIsBuiltin(display) != 0,
+        isMain: CGDisplayIsMain(display) != 0,
+        bounds: CGDisplayBounds(display),
+        pixelWidth: CGDisplayPixelsWide(display),
+        pixelHeight: CGDisplayPixelsHigh(display),
+        rotation: Int(CGDisplayRotation(display).rounded())
+      )
+    }
   }
 }
