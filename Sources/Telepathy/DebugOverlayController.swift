@@ -9,7 +9,10 @@ final class DebugOverlayController {
   private var screenObserver: NSObjectProtocol?
 
   var isVisible = true {
-    didSet { updateVisibility() }
+    didSet {
+      guard oldValue != isVisible else { return }
+      updateVisibility()
+    }
   }
 
   init() {
@@ -52,16 +55,12 @@ final class DebugOverlayController {
   func update(
     rawPoint: CGPoint?,
     smoothedPoint: CGPoint?,
-    targetFrame: CGRect?,
-    status: String,
-    confidence: Double?
+    targetFrame: CGRect?
   ) {
     overlayView.snapshot = DebugOverlaySnapshot(
       rawPoint: rawPoint.map(DesktopGeometry.appKitPoint(fromQuartz:)),
       smoothedPoint: smoothedPoint.map(DesktopGeometry.appKitPoint(fromQuartz:)),
-      targetFrame: targetFrame.map(DesktopGeometry.appKitRect(fromQuartz:)),
-      status: status,
-      confidence: confidence
+      targetFrame: targetFrame.map(DesktopGeometry.appKitRect(fromQuartz:))
     )
     overlayView.needsDisplay = true
   }
@@ -85,17 +84,13 @@ private struct DebugOverlaySnapshot {
   var rawPoint: CGPoint?
   var smoothedPoint: CGPoint?
   var targetFrame: CGRect?
-  var status: String
-  var confidence: Double?
 }
 
 private final class DebugOverlayView: NSView {
   var snapshot = DebugOverlaySnapshot(
     rawPoint: nil,
     smoothedPoint: nil,
-    targetFrame: nil,
-    status: "Starting",
-    confidence: nil
+    targetFrame: nil
   )
 
   override var isFlipped: Bool { false }
@@ -117,7 +112,6 @@ private final class DebugOverlayView: NSView {
     if let smoothedPoint = snapshot.smoothedPoint {
       drawGazeMarker(globalPoint: smoothedPoint, context: context)
     }
-    drawStatus(context: context)
   }
 
   private func local(_ globalPoint: CGPoint) -> CGPoint {
@@ -192,44 +186,4 @@ private final class DebugOverlayView: NSView {
     context.strokeEllipse(in: marker)
   }
 
-  private func drawStatus(context: CGContext) {
-    let confidenceText = snapshot.confidence.map { String(format: "  %.0f%%", $0 * 100) } ?? ""
-    let text = snapshot.status + confidenceText
-    let attributes: [NSAttributedString.Key: Any] = [
-      .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
-      .foregroundColor: OverlayStyle.text,
-    ]
-    let attributed = NSAttributedString(string: text, attributes: attributes)
-    let textSize = attributed.size()
-    let panelSize = CGSize(
-      width: textSize.width + OverlayStyle.space3 * 2,
-      height: textSize.height + OverlayStyle.space2 * 2
-    )
-    let visibleFrame = NSScreen.main?.visibleFrame ?? windowFrame
-    let panelRect = CGRect(
-      x: visibleFrame.minX - windowFrame.minX + OverlayStyle.space3,
-      y: visibleFrame.maxY - windowFrame.minY - panelSize.height - OverlayStyle.space3,
-      width: panelSize.width,
-      height: panelSize.height
-    )
-    let path = CGPath(
-      roundedRect: panelRect,
-      cornerWidth: OverlayStyle.statusCornerRadius,
-      cornerHeight: OverlayStyle.statusCornerRadius,
-      transform: nil
-    )
-    context.addPath(path)
-    context.setFillColor(OverlayStyle.ink.cgColor)
-    context.fillPath()
-    context.addPath(path)
-    context.setStrokeColor(OverlayStyle.accentFaint.cgColor)
-    context.setLineWidth(1)
-    context.strokePath()
-
-    attributed.draw(
-      at: CGPoint(
-        x: panelRect.minX + OverlayStyle.space3,
-        y: panelRect.minY + OverlayStyle.space2
-      ))
-  }
 }

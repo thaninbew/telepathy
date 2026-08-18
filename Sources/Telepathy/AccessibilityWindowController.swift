@@ -14,10 +14,12 @@ final class AccessibilityWindowController {
 
   var isTrusted: Bool { AXIsProcessTrusted() }
 
-  @discardableResult
-  func requestTrustPrompt() -> Bool {
-    let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-    return AXIsProcessTrustedWithOptions(options)
+  func openTrustSettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    else { return }
+    NSWorkspace.shared.open(url)
   }
 
   func window(at point: CGPoint) -> AccessibilityTarget? {

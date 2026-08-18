@@ -1,6 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-"$ROOT/scripts/build-app.sh" debug
-open "$ROOT/build/Telepathy.app"
+APP="${TELEPATHY_APP_PATH:-$HOME/Applications/Telepathy.app}"
+
+if [[ ! -d "$APP" ]]; then
+  echo "Telepathy is not installed at $APP" >&2
+  echo "Run ./scripts/install-app.sh once, then open Telepathy normally." >&2
+  exit 1
+fi
+
+open "$APP"

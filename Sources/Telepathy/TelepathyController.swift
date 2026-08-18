@@ -17,6 +17,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private let accessibility = AccessibilityWindowController()
   private let mapper = AdaptiveGazeMapper()
   private let overlay = DebugOverlayController()
+  private lazy var controlPanel = ControlPanelController()
   private var focusPolicy = FocusPolicy()
 
   private var latestFeatures: GazeFeatures?
@@ -30,14 +31,16 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     didSet {
       UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
       if !enabled { focusPolicy.resetCandidate() }
+      refreshOverlay()
       refreshMenu()
+      refreshControlPanel()
     }
   }
 
   private var debugOverlayEnabled: Bool {
     didSet {
       UserDefaults.standard.set(debugOverlayEnabled, forKey: DefaultsKey.debugOverlay)
-      overlay.isVisible = debugOverlayEnabled
+      refreshOverlay()
       refreshMenu()
     }
   }
@@ -60,15 +63,19 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   func start() {
     configureStatusItem()
+    configureControlPanel()
     configureCallbacks()
-    overlay.isVisible = debugOverlayEnabled
-    overlay.show()
 
-    _ = accessibility.requestTrustPrompt()
-    _ = mouseMonitor.start()
+    if accessibility.isTrusted {
+      _ = mouseMonitor.start()
+    }
     camera.start()
     refreshOverlay()
     refreshMenu()
+    refreshControlPanel()
+    if !accessibility.isTrusted || !mapper.isReady {
+      controlPanel.present()
+    }
   }
 
   func stop() {
@@ -84,6 +91,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       self?.cameraState = state
       self?.refreshOverlay()
       self?.refreshMenu()
+      self?.refreshControlPanel()
     }
     mouseMonitor.onClick = { [weak self] point, now in
       self?.learnFromClick(at: point, now: now)
@@ -91,7 +99,6 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     mouseMonitor.onEmergencyToggle = { [weak self] in
       guard let self else { return }
       self.enabled.toggle()
-      self.refreshOverlay()
     }
   }
 
@@ -108,6 +115,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       latestTarget = nil
       refreshOverlay()
       refreshMenu()
+      refreshControlPanel()
       return
     }
 
@@ -133,6 +141,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     latestTarget = target?.metadata.processIdentifier == getpid() ? nil : target
     transferFocusIfNeeded(now: features.timestamp)
     refreshOverlay()
+    refreshControlPanel()
   }
 
   private func transferFocusIfNeeded(now: TimeInterval) {
@@ -173,6 +182,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     persistCalibration()
     refreshOverlay()
     refreshMenu()
+    refreshControlPanel()
   }
 
   private func restoreCalibration() {
@@ -190,34 +200,22 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func refreshOverlay() {
-    let status: String
-    switch cameraState {
-    case .stopped:
-      status = "CAMERA STOPPED"
-    case .requestingPermission:
-      status = "CAMERA PERMISSION"
-    case .denied:
-      status = "CAMERA DENIED"
-    case .unavailable(let message):
-      status = "CAMERA ERROR  \(message)"
-    case .running where !accessibility.isTrusted:
-      status = "ACCESSIBILITY REQUIRED"
-    case .running where !mapper.isReady:
-      status =
-        "LEARNING  \(mapper.sampleCount)/\(AdaptiveGazeMapper.minimumSampleCount)  CLICK WHAT YOU LOOK AT"
-    case .running where !enabled:
-      status = "PAUSED  ⌘⌥ESC"
-    case .running:
-      status = "TRACKING"
-    }
-
+    overlay.isVisible = debugOverlayEnabled && enabled && latestPrediction != nil
     overlay.update(
       rawPoint: latestPrediction?.rawPoint,
       smoothedPoint: latestPrediction?.smoothedPoint,
-      targetFrame: latestTarget?.metadata.frame,
-      status: status,
-      confidence: latestPrediction?.confidence
+      targetFrame: latestTarget?.metadata.frame
     )
+  }
+
+  private func configureControlPanel() {
+    controlPanel.onEnabledChanged = { [weak self] isEnabled in
+      guard let self, self.enabled != isEnabled else { return }
+      self.enabled = isEnabled
+    }
+    controlPanel.onRequestAccessibility = { [weak self] in
+      self?.requestAccessibility()
+    }
   }
 
   private func configureStatusItem() {
@@ -241,15 +239,32 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     guard let menu else { return }
     menu.removeAllItems()
 
+    if let button = statusItem?.button {
+      button.image = NSImage(
+        systemSymbolName: enabled ? "eye.circle.fill" : "eye.slash.circle",
+        accessibilityDescription: enabled ? "Telepathy on" : "Telepathy off"
+      )
+      button.toolTip = enabled ? "Telepathy is on" : "Telepathy is off"
+    }
+
+    let openItem = NSMenuItem(
+      title: "Open Telepathy…", action: #selector(openControlPanel), keyEquivalent: ""
+    )
+    openItem.target = self
+    menu.addItem(openItem)
+    menu.addItem(.separator())
+
     let status = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
     status.isEnabled = false
     menu.addItem(status)
     menu.addItem(.separator())
 
     let enabledItem = NSMenuItem(
-      title: "Focus follows gaze", action: #selector(toggleEnabled), keyEquivalent: "")
+      title: enabled ? "Turn Telepathy Off" : "Turn Telepathy On",
+      action: #selector(toggleEnabled),
+      keyEquivalent: ""
+    )
     enabledItem.target = self
-    enabledItem.state = enabled ? .on : .off
     menu.addItem(enabledItem)
 
     let debugItem = NSMenuItem(
@@ -290,6 +305,73 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     menu.addItem(quitItem)
   }
 
+  private func refreshControlPanel() {
+    let state: ControlPanelState
+    switch cameraState {
+    case .stopped:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Camera stopped",
+        detail: "Quit and reopen Telepathy to restart camera tracking.",
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .requestingPermission:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Waiting for Camera access",
+        detail: "Allow Camera access in the macOS prompt to begin local tracking.",
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .denied:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Camera access needed",
+        detail: "Enable Telepathy in System Settings > Privacy & Security > Camera.",
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .unavailable(let message):
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Camera unavailable",
+        detail: message,
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .running where !enabled:
+      state = ControlPanelState(
+        enabled: false,
+        status: "Off",
+        detail:
+          "Camera estimation may continue locally, but focus and pointer movement are paused.",
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .running where !accessibility.isTrusted:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Accessibility access needed",
+        detail:
+          "Grant access once to the installed Telepathy app so it can focus windows and move the pointer.",
+        accessibilityReady: false
+      )
+    case .running where !mapper.isReady:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Learning from clicks",
+        detail:
+          "\(mapper.sampleCount)/\(AdaptiveGazeMapper.minimumSampleCount) samples. Look at a target as you click it across different desktop areas.",
+        accessibilityReady: true
+      )
+    case .running:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Tracking",
+        detail:
+          "Look at another visible window. Telepathy will focus it and move the pointer once.",
+        accessibilityReady: true
+      )
+    }
+    controlPanel.update(state)
+  }
+
   private var statusText: String {
     switch cameraState {
     case .stopped: "Camera stopped"
@@ -306,7 +388,6 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   @objc private func toggleEnabled() {
     enabled.toggle()
-    refreshOverlay()
   }
 
   @objc private func toggleDebugOverlay() {
@@ -318,9 +399,13 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   @objc private func requestAccessibility() {
-    _ = accessibility.requestTrustPrompt()
+    accessibility.openTrustSettings()
     refreshMenu()
-    refreshOverlay()
+    refreshControlPanel()
+  }
+
+  @objc private func openControlPanel() {
+    controlPanel.present()
   }
 
   @objc private func resetCalibration() {
@@ -338,6 +423,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     UserDefaults.standard.removeObject(forKey: DefaultsKey.calibrationSamples)
     refreshOverlay()
     refreshMenu()
+    refreshControlPanel()
   }
 
   @objc private func quit() {

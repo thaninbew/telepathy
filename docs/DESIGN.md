@@ -52,6 +52,7 @@ missed switches, and time-to-focus before any number becomes product policy.
 - Physical mouse movement always wins and temporarily suspends gaze transfer.
 - Cursor warping occurs only when changing windows, never continuously.
 - `Command-Option-Escape` immediately pauses or resumes focus transfer.
+- The control window and menu-bar item provide an ordinary persistent on/off control.
 - Low-confidence or uncalibrated tracking does nothing.
 - A target that cannot be identified through public Accessibility APIs does nothing.
 
@@ -82,11 +83,19 @@ The MVP intentionally ships with a visible, click-through overlay:
 - A small gold marker is the filtered gaze estimate.
 - A faint neutral cross is the raw estimate.
 - A hairline gold perimeter identifies the candidate window.
-- A compact monospaced status chip reports permission, learning, pause, or tracking state.
+
+The overlay never displays permission, setup, or status messages over the
+desktop. Those belong in the Telepathy control window and menu-bar menu. The
+overlay also disappears while Telepathy is off or before a calibrated estimate
+exists.
 
 Visual direction: instrument / monochrome. The desktop remains the dominant
 surface; Telepathy adds one sparse warm-gold signal over neutral telemetry. The
 overlay uses no blur, no large color fill, and no competing accent.
+
+The control window follows the same instrument / monochrome direction: warm
+ink surfaces, one gold state signal, compact native controls, and no decorative
+dashboard chrome. Its switch is the authoritative persistent on/off control.
 
 Normal mode should eventually remove the raw point and telemetry. The likely
 steady-state feedback is a brief, faint perimeter pulse only when focus moves.
@@ -184,4 +193,3 @@ Do not judge the MVP by whether the dot appears to follow a face. Record:
 The MVP succeeds when switching to another visible window feels immediate,
 ordinary keyboard input lands there, and Telepathy can remain enabled without
 requiring conscious management.
-
