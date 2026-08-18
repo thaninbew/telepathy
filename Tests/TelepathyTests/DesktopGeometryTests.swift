@@ -27,6 +27,24 @@ final class DesktopGeometryTests: XCTestCase {
     )
   }
 
+  func testSpanningWindowBelongsToDisplayWithLargestIntersection() {
+    let displays = [
+      ActiveDisplay(
+        id: 1,
+        bounds: CGRect(x: 0, y: 0, width: 1_000, height: 800),
+        visibleBounds: CGRect(x: 0, y: 0, width: 1_000, height: 760)
+      ),
+      ActiveDisplay(
+        id: 2,
+        bounds: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+        visibleBounds: CGRect(x: 1_000, y: 0, width: 1_000, height: 760)
+      ),
+    ]
+    let window = CGRect(x: 850, y: 100, width: 700, height: 500)
+
+    XCTAssertEqual(DesktopGeometry.display(owning: window, in: displays)?.id, 2)
+  }
+
   private func display(
     serial: UInt32,
     isMain: Bool,

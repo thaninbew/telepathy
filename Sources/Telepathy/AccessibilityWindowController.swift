@@ -10,8 +10,6 @@ struct AccessibilityTarget {
 
 @MainActor
 final class AccessibilityWindowController {
-  private let systemWide = AXUIElementCreateSystemWide()
-
   var isTrusted: Bool { AXIsProcessTrusted() }
 
   func openTrustSettings() {
@@ -22,35 +20,51 @@ final class AccessibilityWindowController {
     NSWorkspace.shared.open(url)
   }
 
-  func window(at point: CGPoint) -> AccessibilityTarget? {
-    var hitElement: AXUIElement?
-    let result = AXUIElementCopyElementAtPosition(
-      systemWide,
-      Float(point.x),
-      Float(point.y),
-      &hitElement
-    )
-    guard result == .success, let hitElement else { return nil }
-
-    let window = containingWindow(for: hitElement) ?? hitElement
-    guard role(of: window) == kAXWindowRole as String,
-      let metadata = metadata(for: window)
-    else {
-      return nil
-    }
-    return AccessibilityTarget(metadata: metadata, element: window)
-  }
-
-  func focusedWindowIdentity() -> String? {
+  func focusedWindow() -> AccessibilityTarget? {
     guard let running = NSWorkspace.shared.frontmostApplication else { return nil }
     let application = AXUIElementCreateApplication(running.processIdentifier)
     guard
       let focused: AXUIElement = copyAttribute(application, kAXFocusedWindowAttribute as CFString),
       let metadata = metadata(for: focused)
-    else {
-      return nil
+    else { return nil }
+    return AccessibilityTarget(metadata: metadata, element: focused)
+  }
+
+  func eligibleTarget(
+    from remembered: AccessibilityTarget,
+    on display: ActiveDisplay,
+    excludingProcessIdentifier excludedPID: pid_t
+  ) -> AccessibilityTarget? {
+    guard remembered.metadata.processIdentifier != excludedPID,
+      let running = NSRunningApplication(
+        processIdentifier: remembered.metadata.processIdentifier),
+      !running.isTerminated,
+      !running.isHidden,
+      let refreshed = metadata(for: remembered.element),
+      !isMinimized(remembered.element),
+      DesktopGeometry.display(owning: refreshed.frame)?.id == display.id,
+      isOnCurrentSpace(refreshed)
+    else { return nil }
+    return AccessibilityTarget(metadata: refreshed, element: remembered.element)
+  }
+
+  func frontmostEligibleTarget(
+    on display: ActiveDisplay,
+    excludingProcessIdentifier excludedPID: pid_t
+  ) -> AccessibilityTarget? {
+    for info in onScreenWindowInfo() {
+      guard let metadata = windowMetadata(from: info),
+        metadata.processIdentifier != excludedPID,
+        DesktopGeometry.display(owning: metadata.frame)?.id == display.id,
+        let running = NSRunningApplication(processIdentifier: metadata.processIdentifier),
+        !running.isHidden,
+        !running.isTerminated,
+        let target = accessibilityTarget(matching: metadata),
+        !isMinimized(target.element)
+      else { continue }
+      return target
     }
-    return metadata.identity
+    return nil
   }
 
   @discardableResult
@@ -81,18 +95,8 @@ final class AccessibilityWindowController {
     return raised == .success
   }
 
-  private func containingWindow(for element: AXUIElement) -> AXUIElement? {
-    if let window: AXUIElement = copyAttribute(element, kAXWindowAttribute as CFString) {
-      return window
-    }
-
-    var current: AXUIElement? = element
-    for _ in 0..<12 {
-      guard let value = current else { return nil }
-      if role(of: value) == kAXWindowRole as String { return value }
-      current = copyAttribute(value, kAXParentAttribute as CFString)
-    }
-    return nil
+  func warpPointer(to point: CGPoint) {
+    CGWarpMouseCursorPosition(point)
   }
 
   private func metadata(for window: AXUIElement) -> TargetWindow? {
@@ -123,8 +127,70 @@ final class AccessibilityWindowController {
     )
   }
 
-  private func role(of element: AXUIElement) -> String? {
-    copyAttribute(element, kAXRoleAttribute as CFString)
+  private func isMinimized(_ window: AXUIElement) -> Bool {
+    copyAttribute(window, kAXMinimizedAttribute as CFString) ?? false
+  }
+
+  private func isOnCurrentSpace(_ metadata: TargetWindow) -> Bool {
+    onScreenWindowInfo().contains { info in
+      guard let candidate = windowMetadata(from: info) else { return false }
+      return candidate.processIdentifier == metadata.processIdentifier
+        && framesApproximatelyEqual(candidate.frame, metadata.frame)
+    }
+  }
+
+  private func accessibilityTarget(matching expected: TargetWindow) -> AccessibilityTarget? {
+    let application = AXUIElementCreateApplication(expected.processIdentifier)
+    guard let windows: [AXUIElement] = copyAttribute(
+      application, kAXWindowsAttribute as CFString)
+    else { return nil }
+
+    return windows.compactMap { window -> AccessibilityTarget? in
+      guard let metadata = metadata(for: window),
+        framesApproximatelyEqual(metadata.frame, expected.frame)
+      else { return nil }
+      return AccessibilityTarget(metadata: metadata, element: window)
+    }.first
+  }
+
+  private func onScreenWindowInfo() -> [NSDictionary] {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    return CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [NSDictionary] ?? []
+  }
+
+  private func windowMetadata(from info: NSDictionary) -> TargetWindow? {
+    guard let layer = info[kCGWindowLayer] as? NSNumber, layer.intValue == 0,
+      let alpha = info[kCGWindowAlpha] as? NSNumber, alpha.doubleValue > 0.01,
+      let pid = info[kCGWindowOwnerPID] as? NSNumber,
+      let boundsDictionary = info[kCGWindowBounds] as? NSDictionary,
+      let frame = CGRect(dictionaryRepresentation: boundsDictionary),
+      frame.width >= 80,
+      frame.height >= 60
+    else { return nil }
+
+    let title = info[kCGWindowName] as? String ?? ""
+    let processIdentifier = pid.int32Value
+    let identity = [
+      String(processIdentifier),
+      title,
+      String(Int(frame.minX.rounded())),
+      String(Int(frame.minY.rounded())),
+      String(Int(frame.width.rounded())),
+      String(Int(frame.height.rounded())),
+    ].joined(separator: "|")
+    return TargetWindow(
+      processIdentifier: processIdentifier,
+      frame: frame,
+      title: title,
+      identity: identity
+    )
+  }
+
+  private func framesApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+    abs(lhs.minX - rhs.minX) <= 3
+      && abs(lhs.minY - rhs.minY) <= 3
+      && abs(lhs.width - rhs.width) <= 6
+      && abs(lhs.height - rhs.height) <= 6
   }
 
   private func pointAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {

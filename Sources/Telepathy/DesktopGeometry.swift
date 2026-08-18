@@ -13,7 +13,30 @@ struct DisplayGeometry: Equatable {
   let rotation: Int
 }
 
+struct ActiveDisplay: Equatable {
+  let id: CGDirectDisplayID
+  let bounds: CGRect
+  let visibleBounds: CGRect
+}
+
 enum DesktopGeometry {
+  static var activeDisplays: [ActiveDisplay] {
+    var count: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+
+    var displayIDs = Array(repeating: CGDirectDisplayID(), count: Int(count))
+    guard CGGetActiveDisplayList(count, &displayIDs, &count) == .success else { return [] }
+
+    return displayIDs.prefix(Int(count)).map { id in
+      let bounds = CGDisplayBounds(id)
+      let visibleBounds = NSScreen.screens.first(where: {
+        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+          .uint32Value == id
+      }).map { quartzRect(fromAppKit: $0.visibleFrame) } ?? bounds
+      return ActiveDisplay(id: id, bounds: bounds, visibleBounds: visibleBounds)
+    }
+  }
+
   static var quartzBounds: CGRect {
     var count: UInt32 = 0
     guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
@@ -43,6 +66,15 @@ enum DesktopGeometry {
   }
 
   static func appKitRect(fromQuartz rect: CGRect) -> CGRect {
+    CGRect(
+      x: rect.minX,
+      y: primaryDisplayHeight - rect.maxY,
+      width: rect.width,
+      height: rect.height
+    )
+  }
+
+  static func quartzRect(fromAppKit rect: CGRect) -> CGRect {
     CGRect(
       x: rect.minX,
       y: primaryDisplayHeight - rect.maxY,
@@ -87,6 +119,28 @@ enum DesktopGeometry {
       x: min(max(point.x, safe.minX), safe.maxX),
       y: min(max(point.y, safe.minY), safe.maxY)
     )
+  }
+
+  static func display(
+    containing point: CGPoint,
+    in displays: [ActiveDisplay] = activeDisplays
+  ) -> ActiveDisplay? {
+    displays.first(where: { $0.bounds.contains(point) })
+  }
+
+  static func display(
+    owning rect: CGRect,
+    in displays: [ActiveDisplay] = activeDisplays
+  ) -> ActiveDisplay? {
+    displays.max { left, right in
+      intersectionArea(rect, left.bounds) < intersectionArea(rect, right.bounds)
+    }.flatMap { intersectionArea(rect, $0.bounds) > 0 ? $0 : nil }
+  }
+
+  private static func intersectionArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+    let intersection = lhs.intersection(rhs)
+    guard !intersection.isNull else { return 0 }
+    return intersection.width * intersection.height
   }
 
   private static var primaryDisplayHeight: CGFloat {

@@ -61,6 +61,18 @@ final class CalibrationProfileStoreTests: XCTestCase {
     XCTAssertEqual(store.load(layout: "travel"), travel)
   }
 
+  func testDecodesProfilesSavedBeforeExpressionMetrics() throws {
+    let json = """
+      [{"features":{"timestamp":1,"faceX":0.5,"faceY":0.5,"yaw":0,"pitch":0,"pupilX":0.5,"pupilY":0.5,"confidence":1},"normalizedX":0.2,"normalizedY":0.3}]
+      """
+    let samples = try JSONDecoder().decode([CalibrationSample].self, from: Data(json.utf8))
+
+    XCTAssertEqual(samples.count, 1)
+    XCTAssertNil(samples[0].features.leftEyeOpenness)
+    XCTAssertNil(samples[0].features.rightEyeOpenness)
+    XCTAssertNil(samples[0].features.mouthOpenness)
+  }
+
   private func sample(x: Double, y: Double) -> CalibrationSample {
     CalibrationSample(
       features: GazeFeatures(

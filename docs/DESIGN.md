@@ -2,286 +2,196 @@
 
 ## Product thesis
 
-The eyes already identify the next place a person intends to act. Telepathy
-turns that signal into ordinary macOS focus, leaving the keyboard and mouse to
-do what they already do well.
+Telepathy turns visible attention into ordinary macOS display context. The main
+product is not an eye-controlled mouse and does not continuously select windows.
+Head direction chooses a display; the keyboard and mouse keep their normal
+meaning inside that display.
 
-The product is not an eye-controlled mouse and should not feel like assistive
-dwell control. Looking changes focus. Input remains normal.
+The longer-term opportunity is more precise: look at a field, pane, control, or
+text position and act there without navigation ceremony. That research remains
+valuable, but it must not make the reliable display-switching product fragile.
 
-The long-term opportunity is broader than switching monitors. A person should
-eventually be able to look at a character, field, control, pane, or window and
-begin typing or issuing a command there. In an editor, that could remove much of
-the navigation ceremony associated with reaching a text location. It should
-work beyond IDEs because the underlying primitive is universal: attention
-chooses the target, then existing input acts on it.
+## Main product contract
 
-## MVP contract
+1. Capture the camera locally with AVFoundation and Vision.
+2. Classify which configured display the user is facing from face position,
+   yaw, and pitch. Eye features do not override the display decision.
+3. Ignore all movement that remains on the currently active display.
+4. After the selected activation policy succeeds, restore the most recent
+   eligible window on the target display's visible Space.
+5. Restore the last physical pointer position on that display, clamped to its
+   current visible bounds. Use the display center when no position is known.
+6. Let all subsequent input flow through macOS normally.
 
-The MVP operates at window granularity:
+macOS does not expose keyboard focus for an abstract display. Telepathy must
+focus a window to implement a display handoff, but the product never uses head
+or gaze to choose between applications on the same display.
 
-1. Capture the built-in camera locally.
-2. Estimate a point on the combined desktop from head and pupil features.
-3. Identify the macOS Accessibility window under that point.
-4. When the estimate moves into a different window, focus that window.
-5. Warp the pointer once to the estimated point inside the new window.
-6. Let all subsequent keyboard and mouse events flow through macOS normally.
+### Window restoration policy
 
-Telepathy does not intercept, suppress, reinterpret, or replay ordinary
-keyboard input. A space bar pauses a video only because the video window is now
-the ordinary focused window.
+"Last focused" means the most recent eligible window, not the last window ever:
 
-### “Instant” behavior
+- The window must still exist, remain unminimized, belong to a visible app, and
+  still be on the target display.
+- It must be visible on that display's current Space. Telepathy does not summon
+  another Space, unminimize a window, or reveal a hidden app.
+- Closed, moved, hidden, transient, off-Space, and Telepathy-owned windows are
+  discarded.
+- A window spanning displays belongs to the display containing its largest
+  area. Ties are resolved by the window center.
+- If the remembered window is stale, use the frontmost eligible on-screen
+  window on that display.
+- If nothing qualifies, move only the pointer when pointer transfer is enabled;
+  keyboard focus remains unchanged.
+- Full-screen apps, Stage Manager sets, sheets, modal windows, and games are
+  handled conservatively. Never force a Space transition to manufacture a
+  successful-looking switch.
 
-Instant should mean no intentional dwell and no activation gesture. It cannot
-mean acting on every raw camera frame because natural saccades and estimator
-noise would thrash focus.
+This is less gimmicky than focusing the window under a noisy point estimate. A
+screen behaves like a durable workspace, while the exact app remains the user's
+recent explicit choice.
 
-The initial defaults are therefore filters rather than interaction steps:
+## Activation grammar
 
-- Target stability: 90 ms.
-- Physical mouse quiet period: 280 ms.
-- Post-transfer cooldown: 240 ms.
-- Gaze smoothing: 72 percent newest sample, 28 percent previous sample.
-- Visual-indicator smoothing: 22 percent newest sample, 78 percent previous sample.
+Every activation method drives one state machine: `idle -> settling -> armed ->
+commit`. Changing the candidate display resets the state. Physical mouse motion
+and the post-transfer cooldown remain authoritative.
 
-These values are hypotheses. Debug sessions should measure false switches,
-missed switches, and time-to-focus before any number becomes product policy.
+- **Automatic:** commit after 90 ms of stable head selection.
+- **Hold:** commit after a 650 ms hold. The screen bloom grows with progress.
+- **Wink:** arm the target, then accept a unilateral eye closure. Bilateral
+  natural blinks do not confirm.
+- **Mouth open:** arm the target, then accept a debounced mouth-aperture edge.
+- **Keyboard:** arm the target, then press `Command-Option-Space`.
+- **Mouse:** arm the target, then press the middle mouse button.
 
-### Authority rules
+Keyboard and mouse confirmation events are observed, not buffered or replayed.
+Tongue is not in the shipping list because public Vision landmarks do not expose
+a tongue signal. It can be added only after a public signal or a separately
+validated local detector proves reliable.
 
-- Physical mouse movement always wins and temporarily suspends gaze transfer.
-- Cursor warping occurs only when changing windows, never continuously.
-- `Command-Option-Escape` immediately pauses or resumes focus transfer.
-- The control window and menu-bar item provide an ordinary persistent on/off control.
-- Low-confidence or uncalibrated tracking does nothing.
-- A target that cannot be identified through public Accessibility APIs does nothing.
+Automatic is the default. Confirmation modes are alternatives for people who
+want more intent or for environments where reference glances are common.
 
-### Input ownership and typing override
+## Authority and override rules
 
-Gaze must not steal keyboard focus while the user is actively typing and
-glancing at another screen for reference. Input already in progress has higher
-authority than a new attention estimate.
+- The persistent power switch and `Command-Option-Escape` emergency shortcut
+  stop all focus and pointer transfer.
+- Physical pointer movement suspends automatic transfer for 280 ms.
+- A target must remain stable and the 240 ms switch cooldown must expire.
+- Low-confidence or uncalibrated classification does nothing.
+- Cursor warping occurs once per display handoff, never continuously.
+- Telepathy never suppresses, reroutes, or replays ordinary keyboard input.
 
-The intended first policy is a typing lock:
+Active typing should eventually pin the current display context for a short
+quiet interval, with an explicit persistent focus lock for editing, gaming, and
+presentations. That override is still future work. The intended precedence is:
+manual lock, active typing, physical mouse, then Telepathy.
 
-- Every physical key-down pins the currently focused window for a short quiet
-  interval, refreshed by each subsequent key.
-- Gaze estimation and optional feedback may continue during the lock, but
-  window focus and pointer position cannot change.
-- After typing stops, gaze transfer resumes automatically. The interval must be
-  tuned so looking at a window and then pressing a key can still act there,
-  while sustained typing remains protected.
-- A persistent manual focus lock should be available from the control window
-  and a keyboard shortcut for editing, gaming, presentations, or any task where
-  gaze should remain observational.
-- Telepathy must never buffer, replay, reroute, or reinterpret keystrokes to
-  compensate for a late focus decision.
+## Calibration and adaptation
 
-The simplest override principle is therefore: physical mouse activity wins,
-active typing wins for longer, and an explicit focus lock wins until released.
+Calibration is intentional, local, saved per exact display layout, and never
+launched as an unsolicited overlay.
 
-## Calibration
+### Full Calibration
 
-Calibration is intentional and user-triggered. Telepathy presents the center
-and four inset corners of every active display, captures two recent
-head-and-pupil samples per target, and fits a small ridge-regression model over
-the combined desktop. Focus transfer pauses during the sequence. Escape cancels
-without touching the previous profile, and a new profile is committed only if
-the fitted model passes the same readiness checks used during tracking.
+Full Calibration visits the center and four inset corners of every active
+display, shows the direction of the next target, and collects a short stable
+sequence at each point. Two displays take roughly 40 seconds. The pass trains:
 
-Profiles are stored locally in user defaults under a fingerprint of the active
-display identities, bounds, resolution, rotation, and main-display assignment.
-They survive app restarts. A known arrangement restores its own profile; an
-unknown arrangement leaves focus inactive and offers calibration rather than
-silently applying incompatible geometry.
+- a head-only nearest-neighbor display classifier for the main product; and
+- the finer head-and-pupil desktop regression retained for Experimental mode.
 
-Ordinary clicks continue refining the active profile. At mouse-down time, the
-pointer location is a useful label for the most recent head and pupil features,
-but it is supplementary because people sometimes click while looking elsewhere.
-Future versions should add:
+The previous profile stays active unless the new fit passes readiness checks.
+Escape cancels without replacing it.
 
-- Robust outlier rejection.
-- Robust per-display residual correction on top of the layout profile.
-- Opportunistic labels from text-caret placement and other high-confidence actions.
-- Drift detection for posture, lighting, camera position, and display changes.
+### Quick Recenter
 
-Calibration samples are stored locally in the app's user defaults. Camera
-frames are not stored or transmitted.
+Quick Recenter visits only the center of each display and appends recent posture
+samples to the saved Full Calibration. It is intended for a changed chair
+position, viewing distance, or laptop lid angle, not a changed display layout.
 
-### Display layouts
+Profiles are keyed by display identity, geometry, resolution, rotation, and
+main-display assignment. A changed layout selects its matching saved profile or
+requires Full Calibration. It never silently reuses incompatible geometry.
 
-The current runtime reads the active CoreGraphics displays whenever it maps a
-prediction, unions their real bounds, and uses macOS's configured relative
-positions. If the built-in display is arranged to the right of an external
-display, that offset is part of the coordinate space automatically. Screen
-changes also resize the overlay to the new desktop bounds.
+Ordinary non-confirmation clicks add local labels. For the main classifier, a
+click's display is a strong coarse label even when its exact point is imperfect.
+Future adaptation should be recency-weighted, reject outliers, detect posture
+clusters, and ask for Quick Recenter when confidence drifts rather than pooling
+every historical posture into one model.
 
-The calibration flow is explicit and short, never an unsolicited full-screen
-ritual:
+Camera frames are never stored or transmitted. Only compact calibration
+features and labels are persisted locally.
 
-1. The user chooses `Calibrate` from the control window, or accepts a quiet
-   suggestion when no profile matches the current display layout.
-2. Telepathy shows inset corners and a center target across every active
-   display, sampling stable head and pupil features at known coordinates.
-3. The sequence completes in several seconds and stores a profile keyed by
-   display identity, bounds, scale, and rotation.
-4. Ordinary clicks continue refining that profile opportunistically.
+## Feedback design
 
-Changing the layout selects another saved profile or offers calibration; it
-must not silently reuse a geometrically incompatible mapping.
+Visual direction is instrument / monochrome: warm ink surfaces and one sparse
+gold signal. The desktop remains the dominant surface.
 
-### Posture drift
+Each display owns a click-through transparent AppKit panel so feedback works
+across real display geometry and Spaces. A temporary proximity bloom is drawn
+just inside the candidate screen perimeter:
 
-The feature vector already includes face position, yaw, and pitch, so a
-calibration that samples natural movement can tolerate modest posture changes.
-A large change in seat position, camera angle, laptop lid angle, or viewing
-distance can still move the feature distribution outside the calibrated range.
+- **Candidate:** a faint, brief halo says the glance was recognized and the
+  target is armed.
+- **Holding:** the same halo becomes wider and brighter with hold progress.
+- **Confirmed:** a brighter soft perimeter pulse fades in about 800 ms.
 
-Telepathy should compare a rolling head-and-eye baseline with the active
-profile and respond proportionally:
+The bloom uses layered translucent strokes and a restrained shadow, not a large
+color fill or persistent rectangle. Screen feedback can be disabled without
+turning Telepathy off. The separately smoothed gaze-area ring is off by default
+and explicitly labeled Experimental.
 
-- Small drift is corrected through recent, high-confidence click labels while
-  older samples gradually lose influence.
-- Medium drift offers a brief recenter action using one or two known targets,
-  without launching the full calibration automatically.
-- Large or sudden drift pauses transfers and quietly offers the explicit
-  ten-second calibration rather than continuing with confident-looking errors.
-- Tracking resumes only when the current profile is credible for both the
-  display layout and the observed posture range.
-
-Calibration should accommodate the posture the user naturally adopts instead
-of teaching them to hold an artificial fixed pose.
-
-## Debug experience
-
-The MVP intentionally ships with an optional, click-through gaze indicator:
-
-- A thin gold ring represents an approximate gaze area, with separate visual
-  smoothing so feedback can remain calm without slowing focus decisions.
-- A hairline gold perimeter confirms an actual focus transfer and disappears
-  after one second. It never remains around the current candidate window.
-- Each active display owns its own transparent AppKit panel. A single panel
-  stretched across the combined desktop is not reliable across macOS displays
-  and Spaces.
-
-The overlay never displays permission, setup, or status messages over the
-desktop. Those belong in the Telepathy control window and menu-bar menu. The
-overlay also disappears while Telepathy is off or before a calibrated estimate
-exists. The user can disable the indicator independently while focus tracking
-continues.
-
-Visual direction: instrument / monochrome. The desktop remains the dominant
-surface; Telepathy adds one sparse warm-gold signal over neutral telemetry. The
-overlay uses no blur, no large color fill, and no competing accent.
-
-The control window follows the same instrument / monochrome direction: warm
-ink surfaces, one gold state signal, compact native controls, and no decorative
-dashboard chrome. Its switch is the authoritative persistent on/off control.
-
-The likely steady-state feedback is the brief, faint perimeter confirmation
-only when focus moves; the gaze-area ring is primarily a calibration and debug
-instrument.
+Permission and status text never appear in the desktop overlay. They belong in
+the native control window and menu-bar menu.
 
 ## Technical architecture
 
 ```text
 AVFoundation camera
         |
-Apple Vision landmarks
+Apple Vision face landmarks
         |
-head + pupil feature vector -------- mouse click labels
-        |                                  |
-        +------- adaptive gaze mapper -----+
-                         |
-                  desktop coordinate
-                         |
-          Accessibility point hit-testing
-                         |
-             stability and authority policy
-                         |
-          activate window + one cursor warp
+        +--> head features --> per-layout display classifier
+        |                              |
+        |                       activation policy
+        |                              |
+        |                 remembered eligible window/display
+        |                              |
+        |                    AX focus + one pointer warp
+        |
+        +--> head + pupils --> exact desktop mapper --> Experimental only
+
+physical clicks --> local labels for both models
 ```
 
-Apple's built-in Head Pointer is not used because it owns pointer movement and
-does not expose the raw tracking signal required for Telepathy's behavior.
-Telepathy instead uses public Apple frameworks directly: AVFoundation, Vision,
-ApplicationServices Accessibility, CoreGraphics, and AppKit.
+Apple Head Pointer is not embedded because it owns pointer movement and does
+not expose the tracking signal required for this interaction. Telepathy uses
+public AVFoundation, Vision, ApplicationServices Accessibility, CoreGraphics,
+and AppKit APIs directly.
 
-## Known boundaries
+## Experimental precision track
 
-### Games
+Exact window, control, and text placement remains behind Experimental. The
+eventual model can learn from high-confidence clicks and caret placements, keep
+separate posture/camera-geometry clusters, weight recent evidence, and validate
+before promoting a calibration. A click is not always an exact gaze label, so
+continuous learning must use confidence and reject contradictions.
 
-Many games use exclusive fullscreen presentation, raw mouse input, cursor
-locking, or accessibility trees with no meaningful windows or controls. Some
-anti-cheat systems may also treat synthetic cursor positioning as suspicious.
-The MVP should default to doing nothing when it cannot identify a public
-Accessibility window. Game-specific support is a later, opt-in research area,
-not an MVP compatibility promise.
+Laptop movement, lid angle, camera position, lighting, glasses glare, and pose
+can invalidate exact mapping. Coarse display classification should recover
+quickly through Quick Recenter and click display labels; exact text placement
+will require stronger validation and may need better hardware.
 
-### Precision
+Clear glasses can work normally. Glare, tint, thick frames, or partial eye
+occlusion reduce pupil and expression reliability. Main display selection keeps
+working from head features when pupils disappear. Expression modes should fall
+back to another activation method when their landmarks are not credible.
 
-A laptop webcam is plausible for coarse monitor and window selection, but small
-controls and exact text positions require better calibration and likely a
-stronger gaze model. Head direction should carry monitor selection; pupil
-features should refine the point inside that monitor. The debug overlay exists
-to expose rather than conceal this uncertainty.
+## Known boundary: games
 
-### Glasses and partial eye visibility
-
-Clear lenses can work normally, but glare, tinted lenses, thick frames, or a
-poor camera angle can obscure pupil landmarks. The current MVP requires both
-pupils and drops frames where Vision cannot identify them. A later fusion model
-should weight eye features by quality and fall back to head pose for coarse
-display or window selection rather than losing the entire frame. Calibration
-should be performed with the glasses and lighting the user normally uses.
-
-### Focus semantics
-
-macOS keyboard focus, frontmost application, focused window, first responder,
-hover, and pointer position are different states. The MVP guarantees only the
-public operations it performs: activate the application, focus and raise the
-window where supported, and relocate the pointer. Individual apps remain
-responsible for what a key does inside their restored responder chain.
-
-## Roadmap
-
-### 1. Window focus
-
-Prove that monitor and window switching is faster than reaching for the mouse,
-without producing disruptive false transfers.
-
-### 2. Control focus
-
-Use the Accessibility hierarchy to select a button, field, tab, or scroll area
-without requiring pixel-perfect gaze. The interface should snap semantically to
-the intended element while the pointer remains honest about the estimate.
-
-### 3. Text placement
-
-Place the insertion caret near the looked-at glyph. Accessibility text ranges
-can cover standard controls; editor integrations may provide exact layout and
-document coordinates where generic APIs cannot. Eye position selects the rough
-location, and a tiny keyboard correction resolves ambiguity.
-
-### 4. Universal attention input
-
-Expose a local, permissioned attention-target API so editors, browsers, media
-apps, terminals, and accessibility tools can respond semantically instead of
-receiving only a synthetic pointer coordinate.
-
-## MVP evaluation
-
-Do not judge the MVP by whether the dot appears to follow a face. Record:
-
-- Median and p95 gaze-to-focus latency.
-- Intended window-transfer success rate.
-- False transfers per hour.
-- Transfers attempted during physical mouse use.
-- Cursor landing distance from the user's next physical click.
-- Calibration time until the model becomes usable.
-- CPU use and camera frame-processing rate.
-
-The MVP succeeds when switching to another visible window feels immediate,
-ordinary keyboard input lands there, and Telepathy can remain enabled without
-requiring conscious management.
+Exclusive fullscreen presentation, raw mouse input, cursor locking, missing
+Accessibility windows, and anti-cheat systems can invalidate Telepathy's normal
+assumptions. The product does nothing when it cannot find a public eligible
+window. Game support is a later opt-in mode, not an MVP promise.

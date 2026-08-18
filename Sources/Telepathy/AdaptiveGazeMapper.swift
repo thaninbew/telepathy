@@ -3,7 +3,7 @@ import Foundation
 
 final class AdaptiveGazeMapper {
   static let minimumSampleCount = 10
-  static let maximumSampleCount = 120
+  static let maximumSampleCount = 300
 
   private(set) var samples: [CalibrationSample] = []
   private(set) var xWeights: [Double]?

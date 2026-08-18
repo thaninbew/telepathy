@@ -140,25 +140,48 @@ final class CameraGazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
   {
     guard let landmarks = face.landmarks,
       let leftEye = landmarks.leftEye,
-      let rightEye = landmarks.rightEye,
-      let leftPupil = landmarks.leftPupil?.normalizedPoints.first,
-      let rightPupil = landmarks.rightPupil?.normalizedPoints.first,
-      let leftRelative = relativePupil(leftPupil, in: leftEye.normalizedPoints),
-      let rightRelative = relativePupil(rightPupil, in: rightEye.normalizedPoints)
+      let rightEye = landmarks.rightEye
     else {
       return nil
     }
 
-    return GazeFeatures(
+    let leftRelative = landmarks.leftPupil?.normalizedPoints.first.flatMap {
+      relativePupil($0, in: leftEye.normalizedPoints)
+    }
+    let rightRelative = landmarks.rightPupil?.normalizedPoints.first.flatMap {
+      relativePupil($0, in: rightEye.normalizedPoints)
+    }
+    let pupilX = [leftRelative?.x, rightRelative?.x].compactMap { $0 }
+    let pupilY = [leftRelative?.y, rightRelative?.y].compactMap { $0 }
+
+    var features = GazeFeatures(
       timestamp: timestamp,
       faceX: Double(face.boundingBox.midX),
       faceY: Double(face.boundingBox.midY),
       yaw: face.yaw?.doubleValue ?? 0,
       pitch: face.pitch?.doubleValue ?? 0,
-      pupilX: Double((leftRelative.x + rightRelative.x) / 2),
-      pupilY: Double((leftRelative.y + rightRelative.y) / 2),
+      pupilX: pupilX.isEmpty ? 0.5 : Double(pupilX.reduce(0, +) / CGFloat(pupilX.count)),
+      pupilY: pupilY.isEmpty ? 0.5 : Double(pupilY.reduce(0, +) / CGFloat(pupilY.count)),
       confidence: Double(face.confidence)
     )
+    features.leftEyeOpenness = apertureRatio(leftEye.normalizedPoints)
+    features.rightEyeOpenness = apertureRatio(rightEye.normalizedPoints)
+    features.mouthOpenness = landmarks.innerLips.flatMap {
+      apertureRatio($0.normalizedPoints)
+    }
+    return features
+  }
+
+  private func apertureRatio(_ points: [CGPoint]) -> Double? {
+    guard let minX = points.map(\.x).min(),
+      let maxX = points.map(\.x).max(),
+      let minY = points.map(\.y).min(),
+      let maxY = points.map(\.y).max(),
+      maxX - minX > 0.001
+    else {
+      return nil
+    }
+    return Double((maxY - minY) / (maxX - minX))
   }
 
   private func relativePupil(_ pupil: CGPoint, in eyePoints: [CGPoint]) -> CGPoint? {

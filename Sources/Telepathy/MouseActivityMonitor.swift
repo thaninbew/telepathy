@@ -5,6 +5,8 @@ import Foundation
 final class MouseActivityMonitor {
   var onClick: ((CGPoint, TimeInterval) -> Void)?
   var onEmergencyToggle: (() -> Void)?
+  var onPointerActivity: ((CGPoint, TimeInterval) -> Void)?
+  var onConfirmation: ((ConfirmationSignal, TimeInterval) -> Void)?
 
   private(set) var lastPhysicalMouseActivity: TimeInterval = -.infinity
   private var eventTap: CFMachPort?
@@ -72,6 +74,8 @@ final class MouseActivityMonitor {
       let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
       if keyCode == 53, flags.contains(.maskCommand), flags.contains(.maskAlternate) {
         onEmergencyToggle?()
+      } else if keyCode == 49, flags.contains(.maskCommand), flags.contains(.maskAlternate) {
+        onConfirmation?(.keyboard, now)
       }
       return
     }
@@ -81,12 +85,21 @@ final class MouseActivityMonitor {
     {
       guard now >= ignoreMotionUntil else { return }
       lastPhysicalMouseActivity = now
+      onPointerActivity?(event.location, now)
       return
     }
 
     if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
       lastPhysicalMouseActivity = now
-      onClick?(event.location, now)
+      onPointerActivity?(event.location, now)
+      var isConfirmationClick = false
+      if type == .otherMouseDown,
+        event.getIntegerValueField(.mouseEventButtonNumber) == 2
+      {
+        isConfirmationClick = true
+        onConfirmation?(.mouse, now)
+      }
+      if !isConfirmationClick { onClick?(event.location, now) }
     }
   }
 }

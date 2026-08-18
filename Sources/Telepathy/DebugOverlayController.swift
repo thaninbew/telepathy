@@ -2,6 +2,12 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+enum DisplayFeedbackPhase: Equatable {
+  case candidate
+  case holding(progress: Double)
+  case confirmed(intensity: Double)
+}
+
 @MainActor
 final class DebugOverlayController {
   private struct Surface {
@@ -12,7 +18,11 @@ final class DebugOverlayController {
   private var surfaces: [Surface] = []
   private var indicatorSmoother = GazeIndicatorSmoother()
   private var screenObserver: NSObjectProtocol?
-  private var snapshot = DebugOverlaySnapshot(indicatorPoint: nil, targetFrame: nil)
+  private var snapshot = DebugOverlaySnapshot(
+    indicatorPoint: nil,
+    displayFrame: nil,
+    feedbackPhase: nil
+  )
 
   var isVisible = true {
     didSet {
@@ -41,7 +51,8 @@ final class DebugOverlayController {
 
   func update(
     gazePoint: CGPoint?,
-    targetFrame: CGRect?
+    displayFrame: CGRect?,
+    feedbackPhase: DisplayFeedbackPhase?
   ) {
     let indicatorPoint: CGPoint?
     if let gazePoint {
@@ -54,7 +65,8 @@ final class DebugOverlayController {
 
     snapshot = DebugOverlaySnapshot(
       indicatorPoint: indicatorPoint,
-      targetFrame: targetFrame.map(DesktopGeometry.appKitRect(fromQuartz:))
+      displayFrame: displayFrame.map(DesktopGeometry.appKitRect(fromQuartz:)),
+      feedbackPhase: feedbackPhase
     )
     applySnapshot()
   }
@@ -108,13 +120,15 @@ final class DebugOverlayController {
 
 private struct DebugOverlaySnapshot {
   var indicatorPoint: CGPoint?
-  var targetFrame: CGRect?
+  var displayFrame: CGRect?
+  var feedbackPhase: DisplayFeedbackPhase?
 }
 
 private final class DebugOverlayView: NSView {
   var snapshot = DebugOverlaySnapshot(
     indicatorPoint: nil,
-    targetFrame: nil
+    displayFrame: nil,
+    feedbackPhase: nil
   )
 
   override var isFlipped: Bool { false }
@@ -127,8 +141,8 @@ private final class DebugOverlayView: NSView {
     context.saveGState()
     defer { context.restoreGState() }
 
-    if let targetFrame = snapshot.targetFrame {
-      drawTargetWindow(globalFrame: targetFrame, context: context)
+    if let displayFrame = snapshot.displayFrame, let phase = snapshot.feedbackPhase {
+      drawDisplayBloom(globalFrame: displayFrame, phase: phase, context: context)
     }
     if let indicatorPoint = snapshot.indicatorPoint {
       drawGazeIndicator(globalPoint: indicatorPoint, context: context)
@@ -152,23 +166,55 @@ private final class DebugOverlayView: NSView {
     window?.frame ?? DesktopGeometry.appKitBounds
   }
 
-  private func drawTargetWindow(globalFrame: CGRect, context: CGContext) {
-    let frame = local(globalFrame).insetBy(dx: 2, dy: 2)
+  private func drawDisplayBloom(
+    globalFrame: CGRect,
+    phase: DisplayFeedbackPhase,
+    context: CGContext
+  ) {
+    let frame = local(globalFrame).insetBy(dx: 7, dy: 7)
     let path = CGPath(
       roundedRect: frame,
-      cornerWidth: OverlayStyle.windowCornerRadius,
-      cornerHeight: OverlayStyle.windowCornerRadius,
+      cornerWidth: 18,
+      cornerHeight: 18,
       transform: nil
     )
 
+    let progress: Double
+    let intensity: Double
+    switch phase {
+    case .candidate:
+      progress = 0.12
+      intensity = 0.38
+    case .holding(let value):
+      progress = min(max(value, 0), 1)
+      intensity = 0.38 + 0.38 * progress
+    case .confirmed(let value):
+      progress = 1
+      intensity = min(max(value, 0), 1)
+    }
+
+    context.setBlendMode(.screen)
     context.addPath(path)
-    context.setStrokeColor(OverlayStyle.ink.withAlphaComponent(0.72).cgColor)
-    context.setLineWidth(4)
+    context.setStrokeColor(
+      OverlayStyle.accent.withAlphaComponent(0.07 + 0.10 * intensity).cgColor)
+    context.setLineWidth(12 + 14 * progress)
+    context.setShadow(
+      offset: .zero,
+      blur: 18 + 10 * progress,
+      color: OverlayStyle.accent.withAlphaComponent(0.20 * intensity).cgColor
+    )
     context.strokePath()
 
+    context.setShadow(offset: .zero, blur: 7, color: OverlayStyle.accent.cgColor)
     context.addPath(path)
-    context.setStrokeColor(OverlayStyle.accentMuted.cgColor)
-    context.setLineWidth(1.25)
+    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.18 + 0.32 * intensity).cgColor)
+    context.setLineWidth(3 + 4 * progress)
+    context.strokePath()
+
+    context.setShadow(offset: .zero, blur: 0)
+    context.addPath(path)
+    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.55 + 0.30 * intensity).cgColor)
+    context.setLineWidth(1.1 + 0.8 * progress)
     context.strokePath()
   }
 

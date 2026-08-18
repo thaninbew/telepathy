@@ -8,17 +8,26 @@ struct ControlPanelState: Equatable {
   let calibrationButtonTitle: String
   let calibrationEnabled: Bool
   let accessibilityReady: Bool
+  var screenFeedbackEnabled: Bool = true
+  var activationMode: ActivationMode = .automatic
+  var quickRecenterEnabled: Bool = false
 }
 
 @MainActor
 final class ControlPanelController: NSWindowController {
   var onEnabledChanged: ((Bool) -> Void)?
   var onGazeIndicatorChanged: ((Bool) -> Void)?
+  var onScreenFeedbackChanged: ((Bool) -> Void)?
+  var onActivationModeChanged: ((ActivationMode) -> Void)?
   var onCalibrate: (() -> Void)?
+  var onQuickRecenter: (() -> Void)?
   var onRequestAccessibility: (() -> Void)?
 
   private let powerSwitch = NSSwitch()
   private let gazeIndicatorSwitch = NSSwitch()
+  private let screenFeedbackSwitch = NSSwitch()
+  private let activationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let activationDetail = NSTextField(wrappingLabelWithString: "")
   private let statusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
@@ -28,11 +37,12 @@ final class ControlPanelController: NSWindowController {
     action: nil
   )
   private let calibrationButton = NSButton(title: "Calibrate…", target: nil, action: nil)
+  private let quickRecenterButton = NSButton(title: "Quick Recenter…", target: nil, action: nil)
   private var currentState: ControlPanelState?
 
   init() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 440, height: 476),
+      contentRect: NSRect(x: 0, y: 0, width: 468, height: 620),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -70,10 +80,14 @@ final class ControlPanelController: NSWindowController {
     currentState = state
     powerSwitch.state = state.enabled ? .on : .off
     gazeIndicatorSwitch.state = state.gazeIndicatorEnabled ? .on : .off
+    screenFeedbackSwitch.state = state.screenFeedbackEnabled ? .on : .off
+    activationPopup.selectItem(withTitle: state.activationMode.title)
+    activationDetail.stringValue = state.activationMode.detail
     statusLabel.stringValue = state.status
     detailLabel.stringValue = state.detail
     calibrationButton.title = state.calibrationButtonTitle
     calibrationButton.isEnabled = state.calibrationEnabled
+    quickRecenterButton.isEnabled = state.quickRecenterEnabled
     permissionButton.isHidden = state.accessibilityReady
     statusDot.color =
       state.enabled && state.accessibilityReady
@@ -93,10 +107,10 @@ final class ControlPanelController: NSWindowController {
     contentView.addSubview(root)
 
     NSLayoutConstraint.activate([
-      root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
-      root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -28),
-      root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 34),
-      root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -28),
+      root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 32),
+      root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -32),
+      root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 32),
+      root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -32),
     ])
 
     for view in [makeHeader(), makeControlsSection(), makeStatusSection(), makeGuide()] {
@@ -158,30 +172,75 @@ final class ControlPanelController: NSWindowController {
 
     gazeIndicatorSwitch.target = self
     gazeIndicatorSwitch.action = #selector(gazeIndicatorChanged)
-    gazeIndicatorSwitch.setAccessibilityLabel("Show gaze indicator")
+    gazeIndicatorSwitch.setAccessibilityLabel("Show experimental gaze indicator")
+
+    screenFeedbackSwitch.target = self
+    screenFeedbackSwitch.action = #selector(screenFeedbackChanged)
+    screenFeedbackSwitch.setAccessibilityLabel("Show screen bloom")
+
+    activationPopup.addItems(withTitles: ActivationMode.allCases.map(\.title))
+    activationPopup.target = self
+    activationPopup.action = #selector(activationChanged)
+    activationPopup.setAccessibilityLabel("Activation method")
 
     let divider = NSBox()
     divider.boxType = .separator
 
     let focusRow = makeToggleRow(
-      title: "Focus follows gaze",
-      explanation: "Focus the window you look at and move the pointer once.",
+      title: "Display handoff",
+      explanation: "Turn toward another screen to restore its recent window and pointer.",
       control: powerSwitch
     )
+    let activationRow = makeActivationRow()
+    let feedbackRow = makeToggleRow(
+      title: "Screen bloom",
+      explanation: "Briefly show an armed, holding, or completed screen handoff.",
+      control: screenFeedbackSwitch
+    )
     let indicatorRow = makeToggleRow(
-      title: "Gaze indicator",
-      explanation: "Show a calm estimate area and a brief focus confirmation.",
+      title: "Experimental gaze indicator",
+      explanation: "Show the fine eye-and-head estimate used by the research mode.",
       control: gazeIndicatorSwitch
     )
-    let stack = NSStackView(views: [focusRow, divider, indicatorRow])
+    let divider2 = NSBox()
+    divider2.boxType = .separator
+    let divider3 = NSBox()
+    divider3.boxType = .separator
+    let stack = NSStackView(
+      views: [focusRow, divider, activationRow, divider2, feedbackRow, divider3, indicatorRow]
+    )
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = OverlayStyle.space3
-    for view in [focusRow, divider, indicatorRow] {
+    for view in [focusRow, divider, activationRow, divider2, feedbackRow, divider3, indicatorRow] {
       view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
     pin(stack, inside: section)
     return section
+  }
+
+  private func makeActivationRow() -> NSView {
+    let titleLabel = makeLabel(
+      "Activation",
+      font: .systemFont(ofSize: 16, weight: .semibold),
+      color: OverlayStyle.text
+    )
+    activationDetail.font = .systemFont(ofSize: 12)
+    activationDetail.textColor = OverlayStyle.telemetry
+    activationDetail.maximumNumberOfLines = 2
+    activationDetail.stringValue = ActivationMode.automatic.detail
+
+    let labels = NSStackView(views: [titleLabel, activationDetail])
+    labels.orientation = .vertical
+    labels.alignment = .leading
+    labels.spacing = OverlayStyle.space1
+
+    let row = NSStackView(views: [labels, activationPopup])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.distribution = .fill
+    row.spacing = OverlayStyle.space4
+    return row
   }
 
   private func makeToggleRow(
@@ -258,7 +317,13 @@ final class ControlPanelController: NSWindowController {
     calibrationButton.controlSize = .large
     calibrationButton.setAccessibilityLabel("Calibrate gaze tracking")
 
-    let actions = NSStackView(views: [permissionButton, calibrationButton])
+    quickRecenterButton.target = self
+    quickRecenterButton.action = #selector(quickRecenter)
+    quickRecenterButton.bezelStyle = .rounded
+    quickRecenterButton.controlSize = .large
+    quickRecenterButton.setAccessibilityLabel("Quickly recenter head tracking")
+
+    let actions = NSStackView(views: [permissionButton, calibrationButton, quickRecenterButton])
     actions.orientation = .horizontal
     actions.alignment = .centerY
     actions.spacing = OverlayStyle.space2
@@ -273,8 +338,8 @@ final class ControlPanelController: NSWindowController {
 
   private func makeGuide() -> NSView {
     let text = """
-      1  Calibrate and follow targets across every screen.
-      2  When status says Tracking, look at another window.
+      1  Run Full Calibration across every active display.
+      2  Turn toward another screen, then use your chosen activation.
       3  Move the physical mouse whenever you want manual control.
       """
     let guide = makeLabel(
@@ -327,8 +392,24 @@ final class ControlPanelController: NSWindowController {
     onGazeIndicatorChanged?(gazeIndicatorSwitch.state == .on)
   }
 
+  @objc private func screenFeedbackChanged() {
+    onScreenFeedbackChanged?(screenFeedbackSwitch.state == .on)
+  }
+
+  @objc private func activationChanged() {
+    guard let title = activationPopup.selectedItem?.title,
+      let mode = ActivationMode.allCases.first(where: { $0.title == title })
+    else { return }
+    activationDetail.stringValue = mode.detail
+    onActivationModeChanged?(mode)
+  }
+
   @objc private func calibrate() {
     onCalibrate?()
+  }
+
+  @objc private func quickRecenter() {
+    onQuickRecenter?()
   }
 
   @objc private func requestAccessibility() {
