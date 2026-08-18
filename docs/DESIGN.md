@@ -57,6 +57,30 @@ missed switches, and time-to-focus before any number becomes product policy.
 - Low-confidence or uncalibrated tracking does nothing.
 - A target that cannot be identified through public Accessibility APIs does nothing.
 
+### Input ownership and typing override
+
+Gaze must not steal keyboard focus while the user is actively typing and
+glancing at another screen for reference. Input already in progress has higher
+authority than a new attention estimate.
+
+The intended first policy is a typing lock:
+
+- Every physical key-down pins the currently focused window for a short quiet
+  interval, refreshed by each subsequent key.
+- Gaze estimation and optional feedback may continue during the lock, but
+  window focus and pointer position cannot change.
+- After typing stops, gaze transfer resumes automatically. The interval must be
+  tuned so looking at a window and then pressing a key can still act there,
+  while sustained typing remains protected.
+- A persistent manual focus lock should be available from the control window
+  and a keyboard shortcut for editing, gaming, presentations, or any task where
+  gaze should remain observational.
+- Telepathy must never buffer, replay, reroute, or reinterpret keystrokes to
+  compensate for a late focus decision.
+
+The simplest override principle is therefore: physical mouse activity wins,
+active typing wins for longer, and an explicit focus lock wins until released.
+
 ## Calibration
 
 The MVP learns passively from ordinary clicks. At mouse-down time, the pointer
@@ -103,6 +127,28 @@ full-screen ritual:
 
 Changing the layout selects another saved profile or offers calibration; it
 must not silently reuse a geometrically incompatible mapping.
+
+### Posture drift
+
+The feature vector already includes face position, yaw, and pitch, so a
+calibration that samples natural movement can tolerate modest posture changes.
+A large change in seat position, camera angle, laptop lid angle, or viewing
+distance can still move the feature distribution outside the calibrated range.
+
+Telepathy should compare a rolling head-and-eye baseline with the active
+profile and respond proportionally:
+
+- Small drift is corrected through recent, high-confidence click labels while
+  older samples gradually lose influence.
+- Medium drift offers a brief recenter action using one or two known targets,
+  without launching the full calibration automatically.
+- Large or sudden drift pauses transfers and quietly offers the explicit
+  ten-second calibration rather than continuing with confident-looking errors.
+- Tracking resumes only when the current profile is credible for both the
+  display layout and the observed posture range.
+
+Calibration should accommodate the posture the user naturally adopts instead
+of teaching them to hold an artificial fixed pose.
 
 ## Debug experience
 
