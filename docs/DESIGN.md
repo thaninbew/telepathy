@@ -117,7 +117,10 @@ Full Calibration is deliberately different from Quick Recenter. On every active
 display it first holds a center target while the user moves naturally within
 their normal seated posture, then glides through eight perimeter targets. The
 progress ring advances only when fresh camera frames are accepted. Movement
-between targets is never sampled.
+between targets is never sampled. Once calibration starts, the target surface
+contains no instructional text because competing text can pull fixation away
+from the labeled target. Instructions appear only in the confirmation dialog
+before sampling begins.
 
 Two held-out targets per display form a final check. The new profile is saved
 only when the head-only classifier identifies every display with at least 60%

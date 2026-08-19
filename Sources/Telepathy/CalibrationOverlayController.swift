@@ -85,23 +85,14 @@ final class CalibrationOverlayController {
 
   private func run(trainingTargets: [Target], mode: CalibrationMode) async {
     let validationTargets = mode == .full ? makeValidationTargets() : []
-    let totalSteps = trainingTargets.count + validationTargets.count
     var samples: [CalibrationSample] = []
     var previousTarget: Target?
 
-    for (index, target) in trainingTargets.enumerated() {
+    for target in trainingTargets {
       guard !Task.isCancelled else { return }
-      guard
-        await move(
-          from: previousTarget,
-          to: target,
-          step: index + 1,
-          total: totalSteps,
-          mode: mode
-        )
-      else { return }
+      guard await move(from: previousTarget, to: target, mode: mode) else { return }
 
-      showSettling(target: target, step: index + 1, total: totalSteps, mode: mode)
+      showSettling(target: target)
       let settleMilliseconds: Int
       if mode == .quick {
         settleMilliseconds = Timing.quickSettleMilliseconds
@@ -123,11 +114,7 @@ final class CalibrationOverlayController {
       guard
         let captured = await collectSamples(
           at: target,
-          requiredCaptures: requiredCaptures,
-          step: index + 1,
-          total: totalSteps,
-          mode: mode,
-          isValidation: false
+          requiredCaptures: requiredCaptures
         )
       else {
         guard !Task.isCancelled, isRunning else { return }
@@ -139,29 +126,16 @@ final class CalibrationOverlayController {
     }
 
     var observations: [CalibrationValidationObservation] = []
-    for (offset, target) in validationTargets.enumerated() {
+    for target in validationTargets {
       guard !Task.isCancelled else { return }
-      let step = trainingTargets.count + offset + 1
-      guard
-        await move(
-          from: previousTarget,
-          to: target,
-          step: step,
-          total: totalSteps,
-          mode: mode
-        )
-      else { return }
+      guard await move(from: previousTarget, to: target, mode: mode) else { return }
 
-      showSettling(target: target, step: step, total: totalSteps, mode: mode)
+      showSettling(target: target)
       guard await pause(milliseconds: Timing.fullSettleMilliseconds) else { return }
       guard
         let captured = await collectSamples(
           at: target,
-          requiredCaptures: Timing.validationCaptures,
-          step: step,
-          total: totalSteps,
-          mode: mode,
-          isValidation: true
+          requiredCaptures: Timing.validationCaptures
         )
       else {
         guard !Task.isCancelled, isRunning else { return }
@@ -201,11 +175,7 @@ final class CalibrationOverlayController {
 
   private func collectSamples(
     at target: Target,
-    requiredCaptures: Int,
-    step: Int,
-    total: Int,
-    mode: CalibrationMode,
-    isValidation: Bool
+    requiredCaptures: Int
   ) async -> [CalibrationSample]? {
     var captured: [CalibrationSample] = []
     var attempts = 0
@@ -225,11 +195,7 @@ final class CalibrationOverlayController {
 
       showCollecting(
         target: target,
-        progress: CGFloat(captured.count) / CGFloat(requiredCaptures),
-        step: step,
-        total: total,
-        mode: mode,
-        isValidation: isValidation
+        progress: CGFloat(captured.count) / CGFloat(requiredCaptures)
       )
       guard await pause(milliseconds: Timing.sampleIntervalMilliseconds) else { return nil }
     }
@@ -242,17 +208,12 @@ final class CalibrationOverlayController {
   private func move(
     from previous: Target?,
     to target: Target,
-    step: Int,
-    total: Int,
     mode: CalibrationMode
   ) async -> Bool {
     guard let previous else {
       showMoving(
         target: target,
-        displayedPoint: target.appKitPoint,
-        step: step,
-        total: total,
-        mode: mode
+        displayedPoint: target.appKitPoint
       )
       return true
     }
@@ -261,18 +222,12 @@ final class CalibrationOverlayController {
       showMoving(
         target: previous,
         displayedPoint: previous.appKitPoint,
-        nextTarget: target,
-        step: step,
-        total: total,
-        mode: mode
+        nextTarget: target
       )
       guard await pause(milliseconds: Timing.crossDisplayCueMilliseconds) else { return false }
       showMoving(
         target: target,
-        displayedPoint: target.appKitPoint,
-        step: step,
-        total: total,
-        mode: mode
+        displayedPoint: target.appKitPoint
       )
       return true
     }
@@ -280,10 +235,7 @@ final class CalibrationOverlayController {
     if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
       showMoving(
         target: target,
-        displayedPoint: target.appKitPoint,
-        step: step,
-        total: total,
-        mode: mode
+        displayedPoint: target.appKitPoint
       )
       return await pause(milliseconds: Timing.quickTravelMilliseconds)
     }
@@ -306,10 +258,7 @@ final class CalibrationOverlayController {
       )
       showMoving(
         target: target,
-        displayedPoint: point,
-        step: step,
-        total: total,
-        mode: mode
+        displayedPoint: point
       )
       guard await pause(milliseconds: frameMilliseconds) else { return false }
     }
@@ -399,68 +348,32 @@ final class CalibrationOverlayController {
   private func showMoving(
     target: Target,
     displayedPoint: CGPoint,
-    nextTarget: Target? = nil,
-    step: Int,
-    total: Int,
-    mode: CalibrationMode
+    nextTarget: Target? = nil
   ) {
-    let modeTitle = mode == .quick ? "QUICK RECENTER" : "FULL CALIBRATION"
     show(
       target: target,
       displayedPoint: displayedPoint,
       nextTarget: nextTarget,
-      ringProgress: 0,
-      title: nextTarget == nil ? "FOLLOW THE RING" : "FOLLOW THE ARROW",
-      detail: "\(modeTitle)   •   \(step)/\(total)   •   ESC TO CANCEL"
+      ringProgress: 0
     )
   }
 
-  private func showSettling(
-    target: Target,
-    step: Int,
-    total: Int,
-    mode: CalibrationMode
-  ) {
-    let title = mode == .quick ? "LOOK AT THE RING" : "SETTLE ON THE RING"
-    let modeTitle = mode == .quick ? "QUICK RECENTER" : "FULL CALIBRATION"
+  private func showSettling(target: Target) {
     show(
       target: target,
       displayedPoint: target.appKitPoint,
-      ringProgress: 0,
-      title: title,
-      detail: "\(modeTitle)   •   \(step)/\(total)   •   ESC TO CANCEL"
+      ringProgress: 0
     )
   }
 
   private func showCollecting(
     target: Target,
-    progress: CGFloat,
-    step: Int,
-    total: Int,
-    mode: CalibrationMode,
-    isValidation: Bool
+    progress: CGFloat
   ) {
-    let title: String
-    let phase: String
-    if mode == .quick {
-      title = "KEEP LOOKING AT THE RING"
-      phase = "QUICK RECENTER"
-    } else if isValidation {
-      title = "CHECKING THIS POSITION"
-      phase = "FINAL CHECK"
-    } else if target.purpose == .posture {
-      title = "MOVE NATURALLY • KEEP LOOKING HERE"
-      phase = "POSTURE RANGE"
-    } else {
-      title = "LOOK NATURALLY AT THE RING"
-      phase = "DISPLAY COVERAGE"
-    }
     show(
       target: target,
       displayedPoint: target.appKitPoint,
-      ringProgress: progress,
-      title: title,
-      detail: "\(phase)   •   \(step)/\(total)   •   ESC TO CANCEL"
+      ringProgress: progress
     )
   }
 
@@ -468,9 +381,7 @@ final class CalibrationOverlayController {
     target: Target,
     displayedPoint: CGPoint,
     nextTarget: Target? = nil,
-    ringProgress: CGFloat,
-    title: String,
-    detail: String
+    ringProgress: CGFloat
   ) {
     for surface in surfaces {
       let isActive = surface.panel.frame.equalTo(target.screenFrame)
@@ -478,8 +389,6 @@ final class CalibrationOverlayController {
         targetPoint: isActive ? displayedPoint : nil,
         nextTargetPoint: isActive ? nextTarget?.appKitPoint : nil,
         ringProgress: min(max(ringProgress, 0), 1),
-        title: title,
-        detail: detail,
         isActive: isActive
       )
       surface.view.needsDisplay = true
@@ -536,8 +445,6 @@ private struct CalibrationOverlayState {
   var targetPoint: CGPoint?
   var nextTargetPoint: CGPoint?
   var ringProgress: CGFloat = 0
-  var title = ""
-  var detail = ""
   var isActive = false
 }
 
@@ -588,7 +495,6 @@ private final class CalibrationOverlayView: NSView {
       drawNextArrow(from: localPoint, toward: nextTargetPoint, context: context)
     }
 
-    drawInstructions()
   }
 
   private func drawProgressRing(at point: CGPoint, context: CGContext) {
@@ -653,27 +559,4 @@ private final class CalibrationOverlayView: NSView {
     context.strokePath()
   }
 
-  private func drawInstructions() {
-    drawCentered(
-      state.title,
-      y: bounds.maxY - 72,
-      font: .systemFont(ofSize: 13, weight: .semibold),
-      color: OverlayStyle.text
-    )
-    drawCentered(
-      state.detail,
-      y: bounds.maxY - 96,
-      font: .monospacedSystemFont(ofSize: 11, weight: .medium),
-      color: OverlayStyle.telemetry
-    )
-  }
-
-  private func drawCentered(_ text: String, y: CGFloat, font: NSFont, color: NSColor) {
-    let value = NSAttributedString(
-      string: text,
-      attributes: [.font: font, .foregroundColor: color, .kern: 1.2]
-    )
-    let size = value.size()
-    value.draw(at: CGPoint(x: bounds.midX - size.width / 2, y: y))
-  }
 }
