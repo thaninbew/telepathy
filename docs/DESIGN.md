@@ -113,21 +113,32 @@ launched as an unsolicited overlay.
 
 ### Full Calibration
 
-Full Calibration visits the center and four inset corners of every active
-display, shows the direction of the next target, and collects a short stable
-sequence at each point. Two displays take roughly 40 seconds. The pass trains:
+Full Calibration is deliberately different from Quick Recenter. On every active
+display it first holds a center target while the user moves naturally within
+their normal seated posture, then glides through eight perimeter targets. The
+progress ring advances only when fresh camera frames are accepted. Movement
+between targets is never sampled.
+
+Two held-out targets per display form a final check. The new profile is saved
+only when the head-only classifier identifies every display with at least 60%
+per-display accuracy and 70% overall accuracy. Escape, lost tracking, or a
+failed check preserves the previous profile. Two displays take roughly 45
+seconds. The pass trains:
 
 - a head-only nearest-neighbor display classifier for the main product; and
 - the finer head-and-pupil desktop regression retained for Experimental mode.
 
-The previous profile stays active unless the new fit passes readiness checks.
-Escape cancels without replacing it.
+The target moves smoothly within a display. Cross-display movement uses a brief
+direction arrow before the target appears on the next display. The overlay
+honors Reduce Motion by replacing the long glide with a short state change.
 
 ### Quick Recenter
 
-Quick Recenter visits only the center of each display and appends recent posture
-samples to the saved Full Calibration. It is intended for a changed chair
-position, viewing distance, or laptop lid angle, not a changed display layout.
+Quick Recenter visits only the center of each display and appends a small set of
+recent samples to the saved Full Calibration. It does not run posture-range,
+perimeter-coverage, or held-out validation phases. It is intended for a changed
+chair position, viewing distance, or laptop lid angle, not a changed display
+layout.
 
 Profiles are keyed by display identity, geometry, resolution, rotation, and
 main-display assignment. A changed layout selects its matching saved profile or

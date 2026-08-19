@@ -954,7 +954,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if mode == .full {
       alert.messageText = trackingReady ? "Run Full Calibration again?" : "Run Full Calibration?"
       alert.informativeText =
-        "A gold target will move through the center and corners of \(displays) active \(displays == 1 ? "display" : "displays"). The deliberate pass takes about 40 seconds with two displays. Your current profile stays saved if you cancel."
+        "Follow the gold target across \(displays) active \(displays == 1 ? "display" : "displays"). During Posture Range, move naturally in your chair while keeping the ring in view. Telepathy then learns screen coverage and checks unseen positions before saving. The deliberate pass takes about 45 seconds with two displays, and your current profile stays saved if you cancel or the final check fails."
     } else {
       alert.messageText = "Quick Recenter Telepathy?"
       alert.informativeText =

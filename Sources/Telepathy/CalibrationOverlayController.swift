@@ -13,11 +13,28 @@ final class CalibrationOverlayController {
     let appKitPoint: CGPoint
     let quartzPoint: CGPoint
     let screenFrame: CGRect
+    let displayID: CGDirectDisplayID
+    let purpose: CalibrationTargetPurpose
   }
 
   private struct Surface {
     let panel: CalibrationPanel
     let view: CalibrationOverlayView
+  }
+
+  private enum Timing {
+    static let fullTravelMilliseconds = 600
+    static let quickTravelMilliseconds = 240
+    static let crossDisplayCueMilliseconds = 420
+    static let fullSettleMilliseconds = 500
+    static let postureSettleMilliseconds = 750
+    static let quickSettleMilliseconds = 350
+    static let sampleIntervalMilliseconds = 90
+    static let completedCueMilliseconds = 160
+    static let postureCaptures = 44
+    static let coverageCaptures = 6
+    static let validationCaptures = 5
+    static let quickCaptures = 6
   }
 
   var onCapture: ((CGPoint) -> CalibrationSample?)?
@@ -34,7 +51,7 @@ final class CalibrationOverlayController {
 
   func start(mode: CalibrationMode = .full) {
     guard !isRunning else { return }
-    let targets = makeTargets(mode: mode)
+    let targets = makeTrainingTargets(mode: mode)
     guard !targets.isEmpty else {
       onFailure?("No active displays are available for calibration.")
       return
@@ -45,10 +62,12 @@ final class CalibrationOverlayController {
     installEscapeMonitor()
     NSApplication.shared.activate()
     surfaces.first?.panel.makeKeyAndOrderFront(nil)
-    surfaces.dropFirst().forEach { $0.panel.orderFrontRegardless() }
+    for surface in surfaces.dropFirst() {
+      surface.panel.orderFrontRegardless()
+    }
 
     sequenceTask = Task { [weak self] in
-      await self?.run(targets: targets, mode: mode)
+      await self?.run(trainingTargets: targets, mode: mode)
     }
   }
 
@@ -64,47 +83,114 @@ final class CalibrationOverlayController {
     finish()
   }
 
-  private func run(targets: [Target], mode: CalibrationMode) async {
+  private func run(trainingTargets: [Target], mode: CalibrationMode) async {
+    let validationTargets = mode == .full ? makeValidationTargets() : []
+    let totalSteps = trainingTargets.count + validationTargets.count
     var samples: [CalibrationSample] = []
+    var previousTarget: Target?
 
-    for (index, target) in targets.enumerated() {
+    for (index, target) in trainingTargets.enumerated() {
       guard !Task.isCancelled else { return }
-      let nextTarget = index + 1 < targets.count ? targets[index + 1] : nil
-      show(target: target, nextTarget: nextTarget, index: index, total: targets.count, mode: mode)
+      guard
+        await move(
+          from: previousTarget,
+          to: target,
+          step: index + 1,
+          total: totalSteps,
+          mode: mode
+        )
+      else { return }
 
-      do {
-        try await Task.sleep(for: mode == .full ? .milliseconds(2_800) : .milliseconds(600))
-      } catch {
+      showSettling(target: target, step: index + 1, total: totalSteps, mode: mode)
+      let settleMilliseconds: Int
+      if mode == .quick {
+        settleMilliseconds = Timing.quickSettleMilliseconds
+      } else if target.purpose == .posture {
+        settleMilliseconds = Timing.postureSettleMilliseconds
+      } else {
+        settleMilliseconds = Timing.fullSettleMilliseconds
+      }
+      guard await pause(milliseconds: settleMilliseconds) else { return }
+
+      let requiredCaptures: Int
+      switch (mode, target.purpose) {
+      case (.quick, _): requiredCaptures = Timing.quickCaptures
+      case (.full, .posture): requiredCaptures = Timing.postureCaptures
+      case (.full, .coverage): requiredCaptures = Timing.coverageCaptures
+      case (.full, .validation): requiredCaptures = Timing.validationCaptures
+      }
+
+      guard
+        let captured = await collectSamples(
+          at: target,
+          requiredCaptures: requiredCaptures,
+          step: index + 1,
+          total: totalSteps,
+          mode: mode,
+          isValidation: false
+        )
+      else {
+        guard !Task.isCancelled, isRunning else { return }
+        failForLostTracking()
         return
       }
+      samples.append(contentsOf: captured)
+      previousTarget = target
+    }
 
-      let requiredCaptures = mode == .full ? 12 : 6
-      var captures = 0
-      var attempts = 0
-      while captures < requiredCaptures, attempts < requiredCaptures * 6 {
-        guard !Task.isCancelled else { return }
-        attempts += 1
-        if let sample = onCapture?(target.quartzPoint) {
-          samples.append(sample)
-          captures += 1
-        }
-        do {
-          try await Task.sleep(for: .milliseconds(90))
-        } catch {
-          return
-        }
+    var observations: [CalibrationValidationObservation] = []
+    for (offset, target) in validationTargets.enumerated() {
+      guard !Task.isCancelled else { return }
+      let step = trainingTargets.count + offset + 1
+      guard
+        await move(
+          from: previousTarget,
+          to: target,
+          step: step,
+          total: totalSteps,
+          mode: mode
+        )
+      else { return }
+
+      showSettling(target: target, step: step, total: totalSteps, mode: mode)
+      guard await pause(milliseconds: Timing.fullSettleMilliseconds) else { return }
+      guard
+        let captured = await collectSamples(
+          at: target,
+          requiredCaptures: Timing.validationCaptures,
+          step: step,
+          total: totalSteps,
+          mode: mode,
+          isValidation: true
+        )
+      else {
+        guard !Task.isCancelled, isRunning else { return }
+        failForLostTracking()
+        return
       }
+      observations.append(
+        contentsOf: captured.map {
+          CalibrationValidationObservation(
+            expectedDisplayID: target.displayID,
+            features: $0.features
+          )
+        }
+      )
+      previousTarget = target
+    }
 
-      guard captures == requiredCaptures else {
+    if mode == .full {
+      let result = CalibrationValidator.evaluate(
+        trainingSamples: samples,
+        observations: observations,
+        desktopBounds: DesktopGeometry.quartzBounds,
+        displays: DesktopGeometry.activeDisplays
+      )
+      guard result.passed else {
         finish()
         onFailure?(
-          "Telepathy lost a clear view of your eyes. Adjust the camera or lighting and try again.")
-        return
-      }
-
-      do {
-        try await Task.sleep(for: .milliseconds(mode == .full ? 180 : 80))
-      } catch {
+          "The new profile could not reliably distinguish every display during its final check. Keep your face visible, move only as far as you normally sit, and try Full Calibration again."
+        )
         return
       }
     }
@@ -113,26 +199,179 @@ final class CalibrationOverlayController {
     onComplete?(samples, mode)
   }
 
-  private func makeTargets(mode: CalibrationMode) -> [Target] {
-    NSScreen.screens
-      .sorted {
-        if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
-        return $0.frame.minY < $1.frame.minY
+  private func collectSamples(
+    at target: Target,
+    requiredCaptures: Int,
+    step: Int,
+    total: Int,
+    mode: CalibrationMode,
+    isValidation: Bool
+  ) async -> [CalibrationSample]? {
+    var captured: [CalibrationSample] = []
+    var attempts = 0
+    var lastTimestamp: TimeInterval?
+    let maximumAttempts = requiredCaptures + 60
+
+    while captured.count < requiredCaptures, attempts < maximumAttempts {
+      guard !Task.isCancelled else { return nil }
+      attempts += 1
+
+      if let sample = onCapture?(target.quartzPoint),
+        lastTimestamp.map({ sample.features.timestamp > $0 + 0.01 }) ?? true
+      {
+        captured.append(sample)
+        lastTimestamp = sample.features.timestamp
       }
-      .flatMap { screen in
-        let points = CalibrationTargetPlanner.points(in: screen.frame)
-        return (mode == .full ? points : Array(points.prefix(1))).map { appKitPoint in
-          Target(
-            appKitPoint: appKitPoint,
-            quartzPoint: DesktopGeometry.quartzPoint(fromAppKit: appKitPoint),
-            screenFrame: screen.frame
+
+      showCollecting(
+        target: target,
+        progress: CGFloat(captured.count) / CGFloat(requiredCaptures),
+        step: step,
+        total: total,
+        mode: mode,
+        isValidation: isValidation
+      )
+      guard await pause(milliseconds: Timing.sampleIntervalMilliseconds) else { return nil }
+    }
+
+    guard captured.count == requiredCaptures else { return nil }
+    guard await pause(milliseconds: Timing.completedCueMilliseconds) else { return nil }
+    return captured
+  }
+
+  private func move(
+    from previous: Target?,
+    to target: Target,
+    step: Int,
+    total: Int,
+    mode: CalibrationMode
+  ) async -> Bool {
+    guard let previous else {
+      showMoving(
+        target: target,
+        displayedPoint: target.appKitPoint,
+        step: step,
+        total: total,
+        mode: mode
+      )
+      return true
+    }
+
+    if !previous.screenFrame.equalTo(target.screenFrame) {
+      showMoving(
+        target: previous,
+        displayedPoint: previous.appKitPoint,
+        nextTarget: target,
+        step: step,
+        total: total,
+        mode: mode
+      )
+      guard await pause(milliseconds: Timing.crossDisplayCueMilliseconds) else { return false }
+      showMoving(
+        target: target,
+        displayedPoint: target.appKitPoint,
+        step: step,
+        total: total,
+        mode: mode
+      )
+      return true
+    }
+
+    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+      showMoving(
+        target: target,
+        displayedPoint: target.appKitPoint,
+        step: step,
+        total: total,
+        mode: mode
+      )
+      return await pause(milliseconds: Timing.quickTravelMilliseconds)
+    }
+
+    let duration =
+      mode == .full
+      ? Timing.fullTravelMilliseconds
+      : Timing.quickTravelMilliseconds
+    let frameMilliseconds = 16
+    let frameCount = max(duration / frameMilliseconds, 1)
+    for frame in 1...frameCount {
+      guard !Task.isCancelled else { return false }
+      let linearProgress = CGFloat(frame) / CGFloat(frameCount)
+      let easedProgress = linearProgress * linearProgress * (3 - 2 * linearProgress)
+      let point = CGPoint(
+        x: previous.appKitPoint.x
+          + (target.appKitPoint.x - previous.appKitPoint.x) * easedProgress,
+        y: previous.appKitPoint.y
+          + (target.appKitPoint.y - previous.appKitPoint.y) * easedProgress
+      )
+      showMoving(
+        target: target,
+        displayedPoint: point,
+        step: step,
+        total: total,
+        mode: mode
+      )
+      guard await pause(milliseconds: frameMilliseconds) else { return false }
+    }
+    return true
+  }
+
+  private func makeTrainingTargets(mode: CalibrationMode) -> [Target] {
+    sortedScreens().flatMap { screen -> [Target] in
+      guard let displayID = displayID(for: screen) else { return [] }
+      let plans: [PlannedCalibrationTarget]
+      if mode == .full {
+        plans = CalibrationTargetPlanner.fullTrainingTargets(in: screen.frame)
+      } else {
+        plans = [
+          PlannedCalibrationTarget(
+            point: CGPoint(x: screen.frame.midX, y: screen.frame.midY),
+            purpose: .posture
           )
-        }
+        ]
       }
+      return plans.map { target(from: $0, screen: screen, displayID: displayID) }
+    }
+  }
+
+  private func makeValidationTargets() -> [Target] {
+    sortedScreens().flatMap { screen -> [Target] in
+      guard let displayID = displayID(for: screen) else { return [] }
+      return CalibrationTargetPlanner.validationTargets(in: screen.frame).map {
+        target(from: $0, screen: screen, displayID: displayID)
+      }
+    }
+  }
+
+  private func sortedScreens() -> [NSScreen] {
+    NSScreen.screens.sorted {
+      if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+      return $0.frame.minY < $1.frame.minY
+    }
+  }
+
+  private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+    (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+  }
+
+  private func target(
+    from planned: PlannedCalibrationTarget,
+    screen: NSScreen,
+    displayID: CGDirectDisplayID
+  ) -> Target {
+    Target(
+      appKitPoint: planned.point,
+      quartzPoint: DesktopGeometry.quartzPoint(fromAppKit: planned.point),
+      screenFrame: screen.frame,
+      displayID: displayID,
+      purpose: planned.purpose
+    )
   }
 
   private func rebuildSurfaces() {
-    surfaces.forEach { $0.panel.orderOut(nil) }
+    for surface in surfaces {
+      surface.panel.orderOut(nil)
+    }
     surfaces = NSScreen.screens.map { screen in
       let view = CalibrationOverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
       let panel = CalibrationPanel(
@@ -157,24 +396,109 @@ final class CalibrationOverlayController {
     }
   }
 
-  private func show(
+  private func showMoving(
     target: Target,
-    nextTarget: Target?,
-    index: Int,
+    displayedPoint: CGPoint,
+    nextTarget: Target? = nil,
+    step: Int,
     total: Int,
     mode: CalibrationMode
+  ) {
+    let modeTitle = mode == .quick ? "QUICK RECENTER" : "FULL CALIBRATION"
+    show(
+      target: target,
+      displayedPoint: displayedPoint,
+      nextTarget: nextTarget,
+      ringProgress: 0,
+      title: nextTarget == nil ? "FOLLOW THE RING" : "FOLLOW THE ARROW",
+      detail: "\(modeTitle)   •   \(step)/\(total)   •   ESC TO CANCEL"
+    )
+  }
+
+  private func showSettling(
+    target: Target,
+    step: Int,
+    total: Int,
+    mode: CalibrationMode
+  ) {
+    let title = mode == .quick ? "LOOK AT THE RING" : "SETTLE ON THE RING"
+    let modeTitle = mode == .quick ? "QUICK RECENTER" : "FULL CALIBRATION"
+    show(
+      target: target,
+      displayedPoint: target.appKitPoint,
+      ringProgress: 0,
+      title: title,
+      detail: "\(modeTitle)   •   \(step)/\(total)   •   ESC TO CANCEL"
+    )
+  }
+
+  private func showCollecting(
+    target: Target,
+    progress: CGFloat,
+    step: Int,
+    total: Int,
+    mode: CalibrationMode,
+    isValidation: Bool
+  ) {
+    let title: String
+    let phase: String
+    if mode == .quick {
+      title = "KEEP LOOKING AT THE RING"
+      phase = "QUICK RECENTER"
+    } else if isValidation {
+      title = "CHECKING THIS POSITION"
+      phase = "FINAL CHECK"
+    } else if target.purpose == .posture {
+      title = "MOVE NATURALLY • KEEP LOOKING HERE"
+      phase = "POSTURE RANGE"
+    } else {
+      title = "LOOK NATURALLY AT THE RING"
+      phase = "DISPLAY COVERAGE"
+    }
+    show(
+      target: target,
+      displayedPoint: target.appKitPoint,
+      ringProgress: progress,
+      title: title,
+      detail: "\(phase)   •   \(step)/\(total)   •   ESC TO CANCEL"
+    )
+  }
+
+  private func show(
+    target: Target,
+    displayedPoint: CGPoint,
+    nextTarget: Target? = nil,
+    ringProgress: CGFloat,
+    title: String,
+    detail: String
   ) {
     for surface in surfaces {
       let isActive = surface.panel.frame.equalTo(target.screenFrame)
       surface.view.state = CalibrationOverlayState(
-        targetPoint: isActive ? target.appKitPoint : nil,
+        targetPoint: isActive ? displayedPoint : nil,
         nextTargetPoint: isActive ? nextTarget?.appKitPoint : nil,
-        progress: index + 1,
-        total: total,
-        isActive: isActive,
-        mode: mode
+        ringProgress: min(max(ringProgress, 0), 1),
+        title: title,
+        detail: detail,
+        isActive: isActive
       )
       surface.view.needsDisplay = true
+    }
+  }
+
+  private func failForLostTracking() {
+    finish()
+    onFailure?(
+      "Telepathy lost a clear, fresh camera view. Adjust the camera or lighting and try again."
+    )
+  }
+
+  private func pause(milliseconds: Int) async -> Bool {
+    do {
+      try await Task.sleep(for: .milliseconds(milliseconds))
+      return !Task.isCancelled
+    } catch {
+      return false
     }
   }
 
@@ -192,7 +516,9 @@ final class CalibrationOverlayController {
     guard isRunning else { return }
     isRunning = false
     sequenceTask = nil
-    surfaces.forEach { $0.panel.orderOut(nil) }
+    for surface in surfaces {
+      surface.panel.orderOut(nil)
+    }
     surfaces.removeAll()
     if let keyMonitor {
       NSEvent.removeMonitor(keyMonitor)
@@ -209,10 +535,10 @@ private final class CalibrationPanel: NSPanel {
 private struct CalibrationOverlayState {
   var targetPoint: CGPoint?
   var nextTargetPoint: CGPoint?
-  var progress = 0
-  var total = 0
+  var ringProgress: CGFloat = 0
+  var title = ""
+  var detail = ""
   var isActive = false
-  var mode: CalibrationMode = .full
 }
 
 private final class CalibrationOverlayView: NSView {
@@ -242,6 +568,8 @@ private final class CalibrationOverlayView: NSView {
     context.setFillColor(OverlayStyle.accent.withAlphaComponent(0.12).cgColor)
     context.fillEllipse(in: halo)
 
+    drawProgressRing(at: localPoint, context: context)
+
     let target = CGRect(
       x: localPoint.x - OverlayStyle.calibrationTargetRadius,
       y: localPoint.y - OverlayStyle.calibrationTargetRadius,
@@ -263,7 +591,35 @@ private final class CalibrationOverlayView: NSView {
     drawInstructions()
   }
 
-  private func drawNextArrow(from start: CGPoint, toward nextGlobalPoint: CGPoint, context: CGContext) {
+  private func drawProgressRing(at point: CGPoint, context: CGContext) {
+    let radius = OverlayStyle.calibrationProgressRadius
+    context.setLineWidth(OverlayStyle.calibrationProgressLineWidth)
+    context.setLineCap(.round)
+    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.22).cgColor)
+    context.strokeEllipse(
+      in: CGRect(
+        x: point.x - radius,
+        y: point.y - radius,
+        width: radius * 2,
+        height: radius * 2
+      )
+    )
+
+    guard state.ringProgress > 0 else { return }
+    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.94).cgColor)
+    context.addArc(
+      center: point,
+      radius: radius,
+      startAngle: -.pi / 2,
+      endAngle: -.pi / 2 + 2 * .pi * state.ringProgress,
+      clockwise: false
+    )
+    context.strokePath()
+  }
+
+  private func drawNextArrow(
+    from start: CGPoint, toward nextGlobalPoint: CGPoint, context: CGContext
+  ) {
     let next = CGPoint(
       x: nextGlobalPoint.x - (window?.frame.minX ?? 0),
       y: nextGlobalPoint.y - (window?.frame.minY ?? 0)
@@ -298,16 +654,14 @@ private final class CalibrationOverlayView: NSView {
   }
 
   private func drawInstructions() {
-    let title = state.mode == .full ? "LOOK NATURALLY AT THE RING" : "QUICK RECENTER"
-    let detail = "\(state.progress)/\(state.total)   •   ESC TO CANCEL"
     drawCentered(
-      title,
+      state.title,
       y: bounds.maxY - 72,
       font: .systemFont(ofSize: 13, weight: .semibold),
       color: OverlayStyle.text
     )
     drawCentered(
-      detail,
+      state.detail,
       y: bounds.maxY - 96,
       font: .monospacedSystemFont(ofSize: 11, weight: .medium),
       color: OverlayStyle.telemetry

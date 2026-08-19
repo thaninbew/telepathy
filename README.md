@@ -34,10 +34,11 @@ The installer opens `~/Applications/Telepathy.app`. Open the control window from
 the menu-bar eye. Telepathy never places permission messages over the desktop.
 Local ad-hoc updates may require granting Accessibility access again.
 
-Run **Full Calibration** after a new display arrangement. It visits the center
-and corners of every active display and takes roughly 40 seconds for two
-displays. Run **Quick Recenter** after a meaningful posture, viewing-distance,
-or laptop-lid change. Both profiles persist across relaunches.
+Run **Full Calibration** after a new display arrangement. Its guided target
+captures natural posture variation, covers each display perimeter, then checks
+unseen positions before replacing the saved profile. It takes roughly 45
+seconds for two displays. Run **Quick Recenter** after a meaningful posture,
+viewing-distance, or laptop-lid change. Both profiles persist across relaunches.
 
 Automatic activation is the default. Hold means facing the candidate display
 until the 650 ms progress bloom completes. Keyboard activation defaults to Right
