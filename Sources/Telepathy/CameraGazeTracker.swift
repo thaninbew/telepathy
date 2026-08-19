@@ -154,7 +154,7 @@ final class CameraGazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     let pupilX = [leftRelative?.x, rightRelative?.x].compactMap { $0 }
     let pupilY = [leftRelative?.y, rightRelative?.y].compactMap { $0 }
 
-    var features = GazeFeatures(
+    return GazeFeatures(
       timestamp: timestamp,
       faceX: Double(face.boundingBox.midX),
       faceY: Double(face.boundingBox.midY),
@@ -164,24 +164,6 @@ final class CameraGazeTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
       pupilY: pupilY.isEmpty ? 0.5 : Double(pupilY.reduce(0, +) / CGFloat(pupilY.count)),
       confidence: Double(face.confidence)
     )
-    features.leftEyeOpenness = apertureRatio(leftEye.normalizedPoints)
-    features.rightEyeOpenness = apertureRatio(rightEye.normalizedPoints)
-    features.mouthOpenness = landmarks.innerLips.flatMap {
-      apertureRatio($0.normalizedPoints)
-    }
-    return features
-  }
-
-  private func apertureRatio(_ points: [CGPoint]) -> Double? {
-    guard let minX = points.map(\.x).min(),
-      let maxX = points.map(\.x).max(),
-      let minY = points.map(\.y).min(),
-      let maxY = points.map(\.y).max(),
-      maxX - minX > 0.001
-    else {
-      return nil
-    }
-    return Double((maxY - minY) / (maxX - minX))
   }
 
   private func relativePupil(_ pupil: CGPoint, in eyePoints: [CGPoint]) -> CGPoint? {

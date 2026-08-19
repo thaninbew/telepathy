@@ -3,8 +3,6 @@ import Foundation
 
 enum ConfirmationSignal: Equatable {
   case none
-  case wink
-  case mouthOpen
   case keyboard
   case mouse
 }
@@ -48,7 +46,9 @@ struct DisplaySwitchPolicy {
     if candidateDisplayID != targetDisplayID {
       candidateDisplayID = targetDisplayID
       candidateSince = now
-      return DisplaySwitchDecision(targetDisplayID: targetDisplayID, phase: .settling(progress: 0))
+      if stabilityInterval > 0 {
+        return DisplaySwitchDecision(targetDisplayID: targetDisplayID, phase: .settling(progress: 0))
+      }
     }
 
     guard let candidateSince else {
@@ -79,7 +79,7 @@ struct DisplaySwitchPolicy {
       let progress = min(max(elapsed / holdInterval, 0), 1)
       wantsCommit = progress >= 1
       waitingPhase = .holding(progress: progress)
-    case .wink, .mouthOpen, .keyboard, .mouse:
+    case .keyboard, .mouse:
       wantsCommit = signalMatches
       waitingPhase = .armed
     }
@@ -100,7 +100,7 @@ struct DisplaySwitchPolicy {
 
   private static func signal(_ signal: ConfirmationSignal, matches mode: ActivationMode) -> Bool {
     switch (signal, mode) {
-    case (.wink, .wink), (.mouthOpen, .mouthOpen), (.keyboard, .keyboard), (.mouse, .mouse):
+    case (.keyboard, .keyboard), (.mouse, .mouse):
       true
     default:
       false

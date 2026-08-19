@@ -64,7 +64,7 @@ final class DisplaySwitchPolicyTests: XCTestCase {
     )
   }
 
-  func testExpressionOnlyCommitsMatchingArmedSignal() {
+  func testKeyboardOnlyCommitsMatchingArmedSignal() {
     var policy = DisplaySwitchPolicy(
       stabilityInterval: 0.05,
       holdInterval: 0.5,
@@ -72,20 +72,36 @@ final class DisplaySwitchPolicyTests: XCTestCase {
       switchCooldown: 0
     )
     _ = policy.evaluate(
-      targetDisplayID: 2, currentDisplayID: 1, mode: .wink,
+      targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
       now: 1, lastPhysicalMouseActivity: 0
     )
     XCTAssertEqual(
       policy.evaluate(
-        targetDisplayID: 2, currentDisplayID: 1, mode: .wink,
-        now: 1.1, lastPhysicalMouseActivity: 0, signal: .mouthOpen
+        targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+        now: 1.1, lastPhysicalMouseActivity: 0, signal: .mouse
       ).phase,
       .armed
     )
     XCTAssertEqual(
       policy.evaluate(
-        targetDisplayID: 2, currentDisplayID: 1, mode: .wink,
-        now: 1.2, lastPhysicalMouseActivity: 0, signal: .wink
+        targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+        now: 1.2, lastPhysicalMouseActivity: 0, signal: .keyboard
+      ).phase,
+      .commit
+    )
+  }
+
+  func testInstantAutomaticCanCommitOnFirstPrediction() {
+    var policy = DisplaySwitchPolicy(
+      stabilityInterval: 0,
+      holdInterval: 0.65,
+      mouseQuietInterval: 0,
+      switchCooldown: 0
+    )
+    XCTAssertEqual(
+      policy.evaluate(
+        targetDisplayID: 2, currentDisplayID: 1, mode: .automatic,
+        now: 1, lastPhysicalMouseActivity: 0
       ).phase,
       .commit
     )

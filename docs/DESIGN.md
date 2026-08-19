@@ -57,18 +57,22 @@ Every activation method drives one state machine: `idle -> settling -> armed ->
 commit`. Changing the candidate display resets the state. Physical mouse motion
 and the post-transfer cooldown remain authoritative.
 
-- **Automatic:** commit after 90 ms of stable head selection.
-- **Hold:** commit after a 650 ms hold. The screen bloom grows with progress.
-- **Wink:** arm the target, then accept a unilateral eye closure. Bilateral
-  natural blinks do not confirm.
-- **Mouth open:** arm the target, then accept a debounced mouth-aperture edge.
-- **Keyboard:** arm the target, then press `Command-Option-Space`.
+- **Automatic:** commit after the configured Switch delay.
+- **Hold:** keep facing the candidate display for 650 ms. The screen bloom grows
+  with progress, then the handoff commits without a second gesture.
+- **Keyboard:** arm the target, then press the recorded key. Right Shift is the
+  default because it is camera-independent and rarely used alone.
 - **Mouse:** arm the target, then press the middle mouse button.
 
-Keyboard and mouse confirmation events are observed, not buffered or replayed.
-Tongue is not in the shipping list because public Vision landmarks do not expose
-a tongue signal. It can be added only after a public signal or a separately
-validated local detector proves reliable.
+Switch delay can be Instant, 90, 150, 250, 400, or 650 ms. Confirmation events
+are observed, not buffered, suppressed, or replayed. The recorded key keeps its
+ordinary macOS meaning after Telepathy observes it.
+
+Wink, mouth-open, and tongue confirmation are not shipping modes. A fixed
+laptop camera loses facial landmarks precisely when the user turns toward an
+off-axis display, so those gestures fail at the moment they are needed. They
+should return only if different hardware or a separately validated detector
+removes that geometric limitation.
 
 Automatic is the default. Confirmation modes are alternatives for people who
 want more intent or for environments where reference glances are common.
@@ -82,6 +86,20 @@ want more intent or for environments where reference glances are common.
 - Low-confidence or uncalibrated classification does nothing.
 - Cursor warping occurs once per display handoff, never continuously.
 - Telepathy never suppresses, reroutes, or replays ordinary keyboard input.
+
+### Temporary handoff
+
+Auto-return is optional and off by default. When enabled, a successful handoff
+starts a one, two, three, or five second timer that restores the origin display.
+Physical pointer movement or a click on the temporary display cancels the timer
+and adopts that display as the current workspace. Pointer activity that remains
+on the origin does not. Disabling Telepathy, changing a relevant setting,
+starting calibration, or changing the display layout also cancels it.
+
+After an automatic return, Telepathy suppresses the temporary target until the
+head prediction leaves it. This prevents an immediate bounce back while the
+user is still facing that screen. A manual return to the origin never schedules
+the inverse trip.
 
 Active typing should eventually pin the current display context for a short
 quiet interval, with an explicit persistent focus lock for editing, gaming, and
@@ -185,9 +203,9 @@ quickly through Quick Recenter and click display labels; exact text placement
 will require stronger validation and may need better hardware.
 
 Clear glasses can work normally. Glare, tint, thick frames, or partial eye
-occlusion reduce pupil and expression reliability. Main display selection keeps
-working from head features when pupils disappear. Expression modes should fall
-back to another activation method when their landmarks are not credible.
+occlusion reduce pupil reliability in Experimental precision mode. Main display
+selection keeps working from head features when pupils disappear. Shipping
+activation modes do not depend on eye or mouth landmarks.
 
 ## Known boundary: games
 

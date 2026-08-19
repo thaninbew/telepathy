@@ -7,11 +7,15 @@ final class MouseActivityMonitor {
   var onEmergencyToggle: (() -> Void)?
   var onPointerActivity: ((CGPoint, TimeInterval) -> Void)?
   var onConfirmation: ((ConfirmationSignal, TimeInterval) -> Void)?
+  var shortcut = ShortcutBinding.defaultValue {
+    didSet { pressedModifierKeyCodes.removeAll() }
+  }
 
   private(set) var lastPhysicalMouseActivity: TimeInterval = -.infinity
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
   private var ignoreMotionUntil: TimeInterval = -.infinity
+  private var pressedModifierKeyCodes: Set<Int64> = []
 
   var isRunning: Bool { eventTap != nil }
 
@@ -27,6 +31,7 @@ final class MouseActivityMonitor {
       .rightMouseDown,
       .otherMouseDown,
       .keyDown,
+      .flagsChanged,
     ]
     let mask = eventTypes.reduce(CGEventMask(0)) {
       $0 | (CGEventMask(1) << CGEventMask($1.rawValue))
@@ -69,13 +74,30 @@ final class MouseActivityMonitor {
   fileprivate func handle(type: CGEventType, event: CGEvent) {
     let now = ProcessInfo.processInfo.systemUptime
 
-    if type == .keyDown {
+    if type == .keyDown || type == .flagsChanged {
       let flags = event.flags
       let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-      if keyCode == 53, flags.contains(.maskCommand), flags.contains(.maskAlternate) {
+      if type == .keyDown, keyCode == 53, flags.contains(.maskCommand),
+        flags.contains(.maskAlternate)
+      {
         onEmergencyToggle?()
-      } else if keyCode == 49, flags.contains(.maskCommand), flags.contains(.maskAlternate) {
+      } else if ShortcutMatcher.shouldConfirm(
+        type: type,
+        keyCode: keyCode,
+        flags: flags,
+        isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
+        shortcut: shortcut,
+        modifierWasDown: pressedModifierKeyCodes.contains(keyCode)
+      ) {
+        if type == .flagsChanged {
+          pressedModifierKeyCodes.insert(keyCode)
+        }
         onConfirmation?(.keyboard, now)
+      } else if type == .flagsChanged,
+        let flag = ShortcutMatcher.modifierFlag(for: keyCode),
+        !flags.contains(flag)
+      {
+        pressedModifierKeyCodes.remove(keyCode)
       }
       return
     }
@@ -100,6 +122,35 @@ final class MouseActivityMonitor {
         onConfirmation?(.mouse, now)
       }
       if !isConfirmationClick { onClick?(event.location, now) }
+    }
+  }
+}
+
+enum ShortcutMatcher {
+  static func shouldConfirm(
+    type: CGEventType,
+    keyCode: Int64,
+    flags: CGEventFlags,
+    isRepeat: Bool,
+    shortcut: ShortcutBinding,
+    modifierWasDown: Bool
+  ) -> Bool {
+    guard keyCode == shortcut.keyCode else { return false }
+    if type == .keyDown { return !isRepeat }
+    guard type == .flagsChanged, !modifierWasDown,
+      let flag = modifierFlag(for: keyCode)
+    else { return false }
+    return flags.contains(flag)
+  }
+
+  static func modifierFlag(for keyCode: Int64) -> CGEventFlags? {
+    switch keyCode {
+    case 56, 60: .maskShift
+    case 59, 62: .maskControl
+    case 58, 61: .maskAlternate
+    case 54, 55: .maskCommand
+    case 57: .maskAlphaShift
+    default: nil
     }
   }
 }

@@ -10,14 +10,16 @@ continue through macOS unchanged. Camera processing stays on the Mac.
 - Head-led display classification from AVFoundation and Apple Vision.
 - No head or gaze selection between apps on the same display.
 - Last eligible window and last physical pointer position remembered per display.
-- Automatic, hold, wink, mouth-open, keyboard, and middle-mouse activation.
+- Automatic, hold, configurable-keyboard, and middle-mouse activation.
+- Right Shift default shortcut, configurable Switch delay, and optional Auto-return.
 - A temporary warm-gold screen bloom for armed, hold-progress, and confirmed states.
 - Independent controls for the bloom, pointer transfer, and Experimental gaze ring.
 - Saved Full Calibration profiles plus Quick Recenter for posture changes.
 - Physical mouse suppression and `Command-Option-Escape` emergency pause.
 
-Tongue confirmation is intentionally deferred because public Vision landmarks
-do not expose a reliable tongue signal.
+Facial confirmation is intentionally excluded because a fixed laptop camera
+cannot reliably see a wink, open mouth, or tongue while the user faces an
+off-axis display.
 
 ## Build and run
 
@@ -37,9 +39,15 @@ and corners of every active display and takes roughly 40 seconds for two
 displays. Run **Quick Recenter** after a meaningful posture, viewing-distance,
 or laptop-lid change. Both profiles persist across relaunches.
 
-Automatic activation is the default. Hold adds visible progress; wink and
-mouth-open confirm an armed display; keyboard uses `Command-Option-Space`; mouse
-uses the middle button. Physical mouse movement always takes temporary control.
+Automatic activation is the default. Hold means facing the candidate display
+until the 650 ms progress bloom completes. Keyboard activation defaults to Right
+Shift and can record another modifier or ordinary key in Telepathy. The selected
+key appears in parentheses in the Activation menu.
+
+Switch delay controls how long a target must remain stable. Auto-return can
+restore the previous display after one to five seconds; physical mouse movement
+or a click on the temporary display cancels that return and adopts it. Both
+settings persist across relaunches.
 
 The screen bloom is on by default and disappears quickly. The exact gaze-area
 ring is off by default because fine eye-driven selection remains Experimental.

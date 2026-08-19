@@ -11,6 +11,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     static let screenFeedback = "telepathy.screenFeedback"
     static let warpPointer = "telepathy.warpPointer"
     static let activationMode = "telepathy.activationMode"
+    static let shortcutKeyCode = "telepathy.shortcutKeyCode"
+    static let shortcutDisplayName = "telepathy.shortcutDisplayName"
+    static let switchDelay = "telepathy.switchDelay"
+    static let autoReturnInterval = "telepathy.autoReturnInterval"
   }
 
   private let camera = CameraGazeTracker()
@@ -23,7 +27,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private lazy var controlPanel = ControlPanelController()
   private lazy var calibrationOverlay = CalibrationOverlayController()
   private var switchPolicy = DisplaySwitchPolicy()
-  private var expressionDetector = ExpressionConfirmationDetector()
+  private var autoReturnPolicy = AutoReturnPolicy()
 
   private var latestFeatures: GazeFeatures?
   private var latestPrediction: GazePrediction?
@@ -35,6 +39,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var feedbackDisplayFrame: CGRect?
   private var feedbackPhase: DisplayFeedbackPhase?
   private var feedbackTask: Task<Void, Never>?
+  private var autoReturnTask: Task<Void, Never>?
   private var currentLayoutFingerprint = DesktopGeometry.layoutFingerprint
   private var displayObserver: NSObjectProtocol?
   private var isCalibrating = false
@@ -51,6 +56,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       UserDefaults.standard.set(enabled, forKey: DefaultsKey.enabled)
       if !enabled {
         switchPolicy.resetCandidate()
+        cancelAutoReturn()
         clearFeedback()
       }
       refreshOverlay()
@@ -90,7 +96,41 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       UserDefaults.standard.set(activationMode.rawValue, forKey: DefaultsKey.activationMode)
       switchPolicy.resetCandidate()
       pendingConfirmation = .none
+      cancelAutoReturn()
       clearFeedback()
+      refreshMenu()
+      refreshControlPanel()
+    }
+  }
+
+  private var shortcut: ShortcutBinding {
+    didSet {
+      UserDefaults.standard.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
+      UserDefaults.standard.set(shortcut.displayName, forKey: DefaultsKey.shortcutDisplayName)
+      mouseMonitor.shortcut = shortcut
+      pendingConfirmation = .none
+      refreshMenu()
+      refreshControlPanel()
+    }
+  }
+
+  private var switchDelay: TimeInterval {
+    didSet {
+      UserDefaults.standard.set(switchDelay, forKey: DefaultsKey.switchDelay)
+      switchPolicy.stabilityInterval = switchDelay
+      switchPolicy.resetCandidate()
+      pendingConfirmation = .none
+      cancelAutoReturn()
+      clearFeedback()
+      refreshMenu()
+      refreshControlPanel()
+    }
+  }
+
+  private var autoReturnInterval: TimeInterval {
+    didSet {
+      UserDefaults.standard.set(autoReturnInterval, forKey: DefaultsKey.autoReturnInterval)
+      cancelAutoReturn()
       refreshMenu()
       refreshControlPanel()
     }
@@ -104,7 +144,21 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     warpPointer = defaults.object(forKey: DefaultsKey.warpPointer) as? Bool ?? true
     activationMode = ActivationMode(
       rawValue: defaults.string(forKey: DefaultsKey.activationMode) ?? "") ?? .automatic
+    if let keyCode = defaults.object(forKey: DefaultsKey.shortcutKeyCode) as? NSNumber,
+      let displayName = defaults.string(forKey: DefaultsKey.shortcutDisplayName),
+      !displayName.isEmpty
+    {
+      shortcut = ShortcutBinding(keyCode: keyCode.int64Value, displayName: displayName)
+    } else {
+      shortcut = .defaultValue
+    }
+    switchDelay =
+      (defaults.object(forKey: DefaultsKey.switchDelay) as? NSNumber)?.doubleValue ?? 0.09
+    autoReturnInterval =
+      (defaults.object(forKey: DefaultsKey.autoReturnInterval) as? NSNumber)?.doubleValue ?? 0
     super.init()
+    switchPolicy.stabilityInterval = switchDelay
+    mouseMonitor.shortcut = shortcut
     restoreCalibration()
   }
 
@@ -129,6 +183,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   func stop() {
     feedbackTask?.cancel()
+    autoReturnTask?.cancel()
     calibrationOverlay.stop()
     camera.stop()
     mouseMonitor.stop()
@@ -148,7 +203,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       self?.learnFromClick(at: point, now: now)
     }
     mouseMonitor.onPointerActivity = { [weak self] point, _ in
-      self?.rememberPointer(at: point)
+      self?.handlePhysicalPointerActivity(at: point)
     }
     mouseMonitor.onConfirmation = { [weak self] signal, _ in
       self?.pendingConfirmation = signal
@@ -172,12 +227,6 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     updateExperimentalGazePrediction(features: features, bounds: bounds)
     rememberFocusedContext()
 
-    let expressionSignal = expressionDetector.update(
-      features: features,
-      learnNeutral: switchPolicy.candidateDisplayID == nil
-    )
-    if expressionSignal != .none { pendingConfirmation = expressionSignal }
-
     latestDisplayPrediction = displayClassifier.predict(features: features)
     transferDisplayIfNeeded(now: features.timestamp)
     refreshOverlay()
@@ -189,6 +238,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       latestPrediction = nil
       return
     }
+
     let smoothedPoint: CGPoint
     if let previous = latestPrediction?.smoothedPoint {
       let newWeight: CGFloat = 0.72
@@ -212,6 +262,13 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       let prediction = latestDisplayPrediction,
       prediction.confidence >= 0.52
     else {
+      switchPolicy.resetCandidate()
+      pendingConfirmation = .none
+      updateFeedback(for: DisplaySwitchDecision(targetDisplayID: nil, phase: .idle), now: now)
+      return
+    }
+
+    if autoReturnPolicy.shouldSuppress(prediction.displayID) {
       switchPolicy.resetCandidate()
       pendingConfirmation = .none
       updateFeedback(for: DisplaySwitchDecision(targetDisplayID: nil, phase: .idle), now: now)
@@ -246,10 +303,25 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     recentPointerPositions[display.id] = DesktopGeometry.clamp(point, to: display.visibleBounds)
   }
 
-  private func transfer(to displayID: CGDirectDisplayID, now: TimeInterval) {
+  private func handlePhysicalPointerActivity(at point: CGPoint) {
+    rememberPointer(at: point)
+    guard let displayID = DesktopGeometry.display(containing: point)?.id,
+      autoReturnPolicy.pointerActivity(on: displayID)
+    else { return }
+    autoReturnTask?.cancel()
+    autoReturnTask = nil
+  }
+
+  @discardableResult
+  private func transfer(
+    to displayID: CGDirectDisplayID,
+    now: TimeInterval,
+    scheduleAutoReturn: Bool = true
+  ) -> Bool {
     guard let display = DesktopGeometry.activeDisplays.first(where: { $0.id == displayID }) else {
-      return
+      return false
     }
+    let originDisplayID = currentExternalDisplayID
     if let cursor = CGEvent(source: nil)?.location { rememberPointer(at: cursor) }
 
     let remembered = recentWindows[displayID].flatMap {
@@ -268,18 +340,65 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     } ?? CGPoint(x: display.visibleBounds.midX, y: display.visibleBounds.midY)
 
     if warpPointer { mouseMonitor.prepareForCursorWarp(now: now) }
+    var succeeded = false
     if let target {
       let focused = accessibility.focus(target, warpPointerTo: warpPointer ? pointer : nil)
       if focused {
         recentWindows[displayID] = target
         currentExternalDisplayID = displayID
         showConfirmedFeedback(on: display)
+        succeeded = true
       }
     } else if warpPointer {
       accessibility.warpPointer(to: pointer)
       currentExternalDisplayID = displayID
       showConfirmedFeedback(on: display)
+      succeeded = true
     }
+    guard succeeded else { return false }
+    updateAutoReturn(
+      from: originDisplayID,
+      to: displayID,
+      enabled: scheduleAutoReturn && autoReturnInterval > 0
+    )
+    return true
+  }
+
+  private func updateAutoReturn(
+    from originDisplayID: CGDirectDisplayID?,
+    to targetDisplayID: CGDirectDisplayID,
+    enabled: Bool
+  ) {
+    autoReturnTask?.cancel()
+    autoReturnTask = nil
+    guard
+      let plan = autoReturnPolicy.switched(
+        from: originDisplayID,
+        to: targetDisplayID,
+        enabled: enabled
+      )
+    else { return }
+
+    let delay = autoReturnInterval
+    autoReturnTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(delay))
+      guard !Task.isCancelled, let self,
+        let returnDisplayID = self.autoReturnPolicy.fire(plan)
+      else { return }
+      self.autoReturnTask = nil
+      let returned = self.transfer(
+        to: returnDisplayID,
+        now: ProcessInfo.processInfo.systemUptime,
+        scheduleAutoReturn: false
+      )
+      if !returned { self.autoReturnPolicy.returnFailed() }
+    }
+  }
+
+  private func cancelAutoReturn() {
+    autoReturnTask?.cancel()
+    autoReturnTask = nil
+    autoReturnPolicy.cancel()
   }
 
   private func learnFromClick(at point: CGPoint, now: TimeInterval) {
@@ -405,6 +524,18 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       guard let self, self.activationMode != mode else { return }
       self.activationMode = mode
     }
+    controlPanel.onShortcutChanged = { [weak self] shortcut in
+      guard let self, self.shortcut != shortcut else { return }
+      self.shortcut = shortcut
+    }
+    controlPanel.onSwitchDelayChanged = { [weak self] delay in
+      guard let self, abs(self.switchDelay - delay) > 0.001 else { return }
+      self.switchDelay = delay
+    }
+    controlPanel.onAutoReturnChanged = { [weak self] interval in
+      guard let self, abs(self.autoReturnInterval - interval) > 0.001 else { return }
+      self.autoReturnInterval = interval
+    }
     controlPanel.onRequestAccessibility = { [weak self] in
       self?.requestAccessibility()
     }
@@ -509,7 +640,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     let activationMenu = NSMenu(title: "Activation")
     for mode in ActivationMode.allCases {
       let item = NSMenuItem(
-        title: mode.title,
+        title: mode.title(shortcutName: shortcut.displayName),
         action: #selector(selectActivationMode(_:)),
         keyEquivalent: ""
       )
@@ -518,6 +649,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       item.state = activationMode == mode ? .on : .off
       activationMenu.addItem(item)
     }
+    activationMenu.addItem(.separator())
+    let configureShortcut = NSMenuItem(
+      title: "Configure shortcut…",
+      action: #selector(openControlPanel),
+      keyEquivalent: ""
+    )
+    configureShortcut.target = self
+    activationMenu.addItem(configureShortcut)
     activationItem.submenu = activationMenu
     menu.addItem(activationItem)
 
@@ -674,6 +813,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
     state.screenFeedbackEnabled = screenFeedbackEnabled
     state.activationMode = activationMode
+    state.shortcut = shortcut
+    state.switchDelay = switchDelay
+    state.autoReturnInterval = autoReturnInterval
     state.quickRecenterEnabled = trackingReady && calibrationEnabled
     controlPanel.update(state)
   }
@@ -762,6 +904,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     recentPointerPositions.removeAll()
     currentExternalDisplayID = nil
     switchPolicy.resetCandidate()
+    cancelAutoReturn()
     clearFeedback()
     refreshOverlay()
     refreshMenu()
@@ -824,6 +967,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
     isCalibrating = true
     switchPolicy.resetCandidate()
+    cancelAutoReturn()
     clearFeedback()
     controlPanel.dismiss()
     refreshOverlay()
@@ -856,6 +1000,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     latestPrediction = nil
     latestDisplayPrediction = nil
     switchPolicy.resetCandidate()
+    cancelAutoReturn()
     clearFeedback()
     calibrationStore.remove(layout: currentLayoutFingerprint)
     refreshOverlay()

@@ -10,15 +10,21 @@ struct ControlPanelState: Equatable {
   let accessibilityReady: Bool
   var screenFeedbackEnabled: Bool = true
   var activationMode: ActivationMode = .automatic
+  var shortcut: ShortcutBinding = .defaultValue
+  var switchDelay: TimeInterval = 0.09
+  var autoReturnInterval: TimeInterval = 0
   var quickRecenterEnabled: Bool = false
 }
 
 @MainActor
-final class ControlPanelController: NSWindowController {
+final class ControlPanelController: NSWindowController, NSWindowDelegate {
   var onEnabledChanged: ((Bool) -> Void)?
   var onGazeIndicatorChanged: ((Bool) -> Void)?
   var onScreenFeedbackChanged: ((Bool) -> Void)?
   var onActivationModeChanged: ((ActivationMode) -> Void)?
+  var onShortcutChanged: ((ShortcutBinding) -> Void)?
+  var onSwitchDelayChanged: ((TimeInterval) -> Void)?
+  var onAutoReturnChanged: ((TimeInterval) -> Void)?
   var onCalibrate: (() -> Void)?
   var onQuickRecenter: (() -> Void)?
   var onRequestAccessibility: (() -> Void)?
@@ -28,6 +34,9 @@ final class ControlPanelController: NSWindowController {
   private let screenFeedbackSwitch = NSSwitch()
   private let activationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let activationDetail = NSTextField(wrappingLabelWithString: "")
+  private let shortcutButton = NSButton(title: "Right Shift", target: nil, action: nil)
+  private let switchDelayPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let autoReturnPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let statusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
@@ -39,10 +48,11 @@ final class ControlPanelController: NSWindowController {
   private let calibrationButton = NSButton(title: "Calibrate…", target: nil, action: nil)
   private let quickRecenterButton = NSButton(title: "Quick Recenter…", target: nil, action: nil)
   private var currentState: ControlPanelState?
+  private var shortcutMonitor: Any?
 
   init() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 468, height: 620),
+      contentRect: NSRect(x: 0, y: 0, width: 468, height: 760),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -56,6 +66,7 @@ final class ControlPanelController: NSWindowController {
     window.center()
     window.setFrameAutosaveName("TelepathyControlPanel")
     super.init(window: window)
+    window.delegate = self
     buildInterface()
   }
 
@@ -72,7 +83,12 @@ final class ControlPanelController: NSWindowController {
   }
 
   func dismiss() {
+    finishShortcutRecording(with: nil)
     window?.orderOut(nil)
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    finishShortcutRecording(with: nil)
   }
 
   func update(_ state: ControlPanelState) {
@@ -81,8 +97,13 @@ final class ControlPanelController: NSWindowController {
     powerSwitch.state = state.enabled ? .on : .off
     gazeIndicatorSwitch.state = state.gazeIndicatorEnabled ? .on : .off
     screenFeedbackSwitch.state = state.screenFeedbackEnabled ? .on : .off
-    activationPopup.selectItem(withTitle: state.activationMode.title)
-    activationDetail.stringValue = state.activationMode.detail
+    rebuildActivationMenu(shortcutName: state.shortcut.displayName)
+    selectActivationMode(state.activationMode)
+    activationDetail.stringValue = state.activationMode.detail(
+      shortcutName: state.shortcut.displayName)
+    if shortcutMonitor == nil { shortcutButton.title = state.shortcut.displayName }
+    selectPopup(switchDelayPopup, value: state.switchDelay)
+    selectPopup(autoReturnPopup, value: state.autoReturnInterval)
     statusLabel.stringValue = state.status
     detailLabel.stringValue = state.detail
     calibrationButton.title = state.calibrationButtonTitle
@@ -178,13 +199,29 @@ final class ControlPanelController: NSWindowController {
     screenFeedbackSwitch.action = #selector(screenFeedbackChanged)
     screenFeedbackSwitch.setAccessibilityLabel("Show screen bloom")
 
-    activationPopup.addItems(withTitles: ActivationMode.allCases.map(\.title))
     activationPopup.target = self
     activationPopup.action = #selector(activationChanged)
     activationPopup.setAccessibilityLabel("Activation method")
 
-    let divider = NSBox()
-    divider.boxType = .separator
+    shortcutButton.target = self
+    shortcutButton.action = #selector(beginShortcutRecording)
+    shortcutButton.bezelStyle = .rounded
+    shortcutButton.setAccessibilityLabel("Activation shortcut")
+
+    configurePopup(
+      switchDelayPopup,
+      values: [("Instant", 0), ("90 ms", 0.09), ("150 ms", 0.15), ("250 ms", 0.25),
+        ("400 ms", 0.4), ("650 ms", 0.65)],
+      action: #selector(switchDelayChanged),
+      accessibilityLabel: "Switch delay"
+    )
+    configurePopup(
+      autoReturnPopup,
+      values: [("Off", 0), ("1 second", 1), ("2 seconds", 2), ("3 seconds", 3),
+        ("5 seconds", 5)],
+      action: #selector(autoReturnChanged),
+      accessibilityLabel: "Auto-return"
+    )
 
     let focusRow = makeToggleRow(
       title: "Display handoff",
@@ -192,6 +229,21 @@ final class ControlPanelController: NSWindowController {
       control: powerSwitch
     )
     let activationRow = makeActivationRow()
+    let shortcutRow = makeSettingRow(
+      title: "Keyboard shortcut",
+      explanation: "Observed without blocking the key. Click it to record another.",
+      control: shortcutButton
+    )
+    let delayRow = makeSettingRow(
+      title: "Switch delay",
+      explanation: "How long the target screen must remain stable before activation.",
+      control: switchDelayPopup
+    )
+    let autoReturnRow = makeSettingRow(
+      title: "Auto-return",
+      explanation: "Return to the previous screen unless physical mouse input adopts this one.",
+      control: autoReturnPopup
+    )
     let feedbackRow = makeToggleRow(
       title: "Screen bloom",
       explanation: "Briefly show an armed, holding, or completed screen handoff.",
@@ -202,17 +254,22 @@ final class ControlPanelController: NSWindowController {
       explanation: "Show the fine eye-and-head estimate used by the research mode.",
       control: gazeIndicatorSwitch
     )
-    let divider2 = NSBox()
-    divider2.boxType = .separator
-    let divider3 = NSBox()
-    divider3.boxType = .separator
+    let dividers = (0..<6).map { _ -> NSBox in
+      let divider = NSBox()
+      divider.boxType = .separator
+      return divider
+    }
+    let rows: [NSView] = [
+      focusRow, dividers[0], activationRow, dividers[1], shortcutRow, dividers[2], delayRow,
+      dividers[3], autoReturnRow, dividers[4], feedbackRow, dividers[5], indicatorRow,
+    ]
     let stack = NSStackView(
-      views: [focusRow, divider, activationRow, divider2, feedbackRow, divider3, indicatorRow]
+      views: rows
     )
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = OverlayStyle.space3
-    for view in [focusRow, divider, activationRow, divider2, feedbackRow, divider3, indicatorRow] {
+    for view in rows {
       view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
     pin(stack, inside: section)
@@ -228,7 +285,8 @@ final class ControlPanelController: NSWindowController {
     activationDetail.font = .systemFont(ofSize: 12)
     activationDetail.textColor = OverlayStyle.telemetry
     activationDetail.maximumNumberOfLines = 2
-    activationDetail.stringValue = ActivationMode.automatic.detail
+    activationDetail.stringValue = ActivationMode.automatic.detail(
+      shortcutName: ShortcutBinding.defaultValue.displayName)
 
     let labels = NSStackView(views: [titleLabel, activationDetail])
     labels.orientation = .vertical
@@ -265,6 +323,37 @@ final class ControlPanelController: NSWindowController {
     labels.alignment = .leading
     labels.spacing = OverlayStyle.space1
 
+    let row = NSStackView(views: [labels, control])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.distribution = .fill
+    row.spacing = OverlayStyle.space4
+    return row
+  }
+
+  private func makeSettingRow(
+    title: String,
+    explanation: String,
+    control: NSControl
+  ) -> NSView {
+    let titleLabel = makeLabel(
+      title,
+      font: .systemFont(ofSize: 16, weight: .semibold),
+      color: OverlayStyle.text
+    )
+    let explanationLabel = makeLabel(
+      explanation,
+      font: .systemFont(ofSize: 12),
+      color: OverlayStyle.telemetry
+    )
+    explanationLabel.maximumNumberOfLines = 2
+
+    let labels = NSStackView(views: [titleLabel, explanationLabel])
+    labels.orientation = .vertical
+    labels.alignment = .leading
+    labels.spacing = OverlayStyle.space1
+
+    control.setContentHuggingPriority(.required, for: .horizontal)
     let row = NSStackView(views: [labels, control])
     row.orientation = .horizontal
     row.alignment = .centerY
@@ -397,11 +486,152 @@ final class ControlPanelController: NSWindowController {
   }
 
   @objc private func activationChanged() {
-    guard let title = activationPopup.selectedItem?.title,
-      let mode = ActivationMode.allCases.first(where: { $0.title == title })
+    guard let rawValue = activationPopup.selectedItem?.representedObject as? String,
+      let mode = ActivationMode(rawValue: rawValue)
     else { return }
-    activationDetail.stringValue = mode.detail
+    let shortcutName = currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
+    activationDetail.stringValue = mode.detail(shortcutName: shortcutName)
     onActivationModeChanged?(mode)
+  }
+
+  @objc private func beginShortcutRecording() {
+    finishShortcutRecording(with: nil)
+    shortcutButton.title = "Press a key…"
+    shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+      [weak self] event in
+      guard let self else { return event }
+      if event.type == .keyDown, event.keyCode == 53 {
+        self.finishShortcutRecording(with: nil)
+        return nil
+      }
+      guard let binding = Self.shortcutBinding(from: event) else { return event }
+      self.finishShortcutRecording(with: binding)
+      return nil
+    }
+    window?.makeFirstResponder(shortcutButton)
+  }
+
+  @objc private func switchDelayChanged() {
+    guard let value = switchDelayPopup.selectedItem?.representedObject as? NSNumber else { return }
+    onSwitchDelayChanged?(value.doubleValue)
+  }
+
+  @objc private func autoReturnChanged() {
+    guard let value = autoReturnPopup.selectedItem?.representedObject as? NSNumber else { return }
+    onAutoReturnChanged?(value.doubleValue)
+  }
+
+  private func finishShortcutRecording(with binding: ShortcutBinding?) {
+    if let shortcutMonitor {
+      NSEvent.removeMonitor(shortcutMonitor)
+      self.shortcutMonitor = nil
+    }
+    if let binding {
+      shortcutButton.title = binding.displayName
+      onShortcutChanged?(binding)
+    } else {
+      shortcutButton.title = currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
+    }
+  }
+
+  private func rebuildActivationMenu(shortcutName: String) {
+    let titles = ActivationMode.allCases.map { $0.title(shortcutName: shortcutName) }
+    guard activationPopup.itemTitles != titles else { return }
+    activationPopup.removeAllItems()
+    for mode in ActivationMode.allCases {
+      activationPopup.addItem(withTitle: mode.title(shortcutName: shortcutName))
+      activationPopup.lastItem?.representedObject = mode.rawValue
+    }
+  }
+
+  private func selectActivationMode(_ mode: ActivationMode) {
+    guard let index = activationPopup.itemArray.firstIndex(where: {
+      ($0.representedObject as? String) == mode.rawValue
+    }) else { return }
+    activationPopup.selectItem(at: index)
+  }
+
+  private func configurePopup(
+    _ popup: NSPopUpButton,
+    values: [(String, Double)],
+    action: Selector,
+    accessibilityLabel: String
+  ) {
+    for (title, value) in values {
+      popup.addItem(withTitle: title)
+      popup.lastItem?.representedObject = NSNumber(value: value)
+    }
+    popup.target = self
+    popup.action = action
+    popup.setAccessibilityLabel(accessibilityLabel)
+  }
+
+  private func selectPopup(_ popup: NSPopUpButton, value: TimeInterval) {
+    guard let index = popup.itemArray.firstIndex(where: {
+      guard let number = $0.representedObject as? NSNumber else { return false }
+      return abs(number.doubleValue - value) < 0.001
+    }) else { return }
+    popup.selectItem(at: index)
+  }
+
+  private static func shortcutBinding(from event: NSEvent) -> ShortcutBinding? {
+    let keyCode = Int64(event.keyCode)
+    if event.type == .flagsChanged {
+      guard modifierIsDown(keyCode: keyCode, flags: event.modifierFlags),
+        let name = modifierName(keyCode: keyCode)
+      else { return nil }
+      return ShortcutBinding(keyCode: keyCode, displayName: name)
+    }
+    guard event.type == .keyDown, !event.isARepeat else { return nil }
+    let name = keyName(keyCode: keyCode, characters: event.charactersIgnoringModifiers)
+    return ShortcutBinding(keyCode: keyCode, displayName: name)
+  }
+
+  private static func modifierIsDown(keyCode: Int64, flags: NSEvent.ModifierFlags) -> Bool {
+    switch keyCode {
+    case 56, 60: flags.contains(.shift)
+    case 59, 62: flags.contains(.control)
+    case 58, 61: flags.contains(.option)
+    case 54, 55: flags.contains(.command)
+    case 57: flags.contains(.capsLock)
+    default: false
+    }
+  }
+
+  private static func modifierName(keyCode: Int64) -> String? {
+    switch keyCode {
+    case 56: "Left Shift"
+    case 60: "Right Shift"
+    case 59: "Left Control"
+    case 62: "Right Control"
+    case 58: "Left Option"
+    case 61: "Right Option"
+    case 55: "Left Command"
+    case 54: "Right Command"
+    case 57: "Caps Lock"
+    default: nil
+    }
+  }
+
+  private static func keyName(keyCode: Int64, characters: String?) -> String {
+    switch keyCode {
+    case 36: return "Return"
+    case 48: return "Tab"
+    case 49: return "Space"
+    case 51: return "Delete"
+    case 115: return "Home"
+    case 116: return "Page Up"
+    case 117: return "Forward Delete"
+    case 119: return "End"
+    case 121: return "Page Down"
+    case 123: return "Left Arrow"
+    case 124: return "Right Arrow"
+    case 125: return "Down Arrow"
+    case 126: return "Up Arrow"
+    default:
+      let cleaned = characters?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
+      return cleaned.isEmpty ? "Key \(keyCode)" : cleaned
+    }
   }
 
   @objc private func calibrate() {

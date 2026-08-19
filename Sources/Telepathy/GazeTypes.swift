@@ -12,9 +12,6 @@ struct GazeFeatures: Equatable, Codable {
   let pupilX: Double
   let pupilY: Double
   let confidence: Double
-  var leftEyeOpenness: Double? = nil
-  var rightEyeOpenness: Double? = nil
-  var mouthOpenness: Double? = nil
 
   var vector: [Double] {
     [1, faceX, faceY, yaw, pitch, pupilX, pupilY]
@@ -24,32 +21,33 @@ struct GazeFeatures: Equatable, Codable {
 enum ActivationMode: String, CaseIterable, Codable {
   case automatic
   case hold
-  case wink
-  case mouthOpen
   case keyboard
   case mouse
 
-  var title: String {
+  func title(shortcutName: String) -> String {
     switch self {
     case .automatic: "Automatic"
     case .hold: "Hold"
-    case .wink: "Wink"
-    case .mouthOpen: "Mouth open"
-    case .keyboard: "Keyboard shortcut"
+    case .keyboard: "Keyboard (\(shortcutName))"
     case .mouse: "Middle mouse button"
     }
   }
 
-  var detail: String {
+  func detail(shortcutName: String) -> String {
     switch self {
-    case .automatic: "Switch after a short, stable head turn."
-    case .hold: "Keep looking until the screen bloom completes."
-    case .wink: "Glance at a screen, then wink to confirm."
-    case .mouthOpen: "Glance at a screen, then open your mouth to confirm."
-    case .keyboard: "Glance at a screen, then press Command-Option-Space."
-    case .mouse: "Glance at a screen, then press the middle mouse button."
+    case .automatic: "Switch after the configured delay."
+    case .hold: "Keep facing the screen until the 650 ms bloom completes."
+    case .keyboard: "Face a screen, then press \(shortcutName). Change it below."
+    case .mouse: "Face a screen, then press the middle mouse button."
     }
   }
+}
+
+struct ShortcutBinding: Codable, Equatable {
+  let keyCode: Int64
+  let displayName: String
+
+  static let defaultValue = ShortcutBinding(keyCode: 60, displayName: "Right Shift")
 }
 
 struct GazePrediction: Equatable {
