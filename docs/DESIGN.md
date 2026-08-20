@@ -171,7 +171,7 @@ just inside the candidate screen perimeter:
 - **Candidate:** a thin, brief edge light says the stable glance was recognized and the
   target is armed.
 - **Dwell:** the same edge light creeps farther inward with dwell progress.
-- **Confirmed:** a soft edge light creeps inward and disappears in about 540 ms.
+- **Confirmed:** a soft edge light creeps inward and disappears in about 720 ms.
 
 The bloom is four clipped edge gradients plus a one-pixel hairline. It has no
 center-origin stroke, shadow, persistent rectangle, or settling-state render.

@@ -144,14 +144,14 @@ struct EdgeBloomMetrics: Equatable {
   static func resolve(_ phase: DisplayFeedbackPhase) -> EdgeBloomMetrics {
     switch phase {
     case .candidate:
-      return EdgeBloomMetrics(depth: 6, edgeAlpha: 0.055, middleAlpha: 0.018, hairlineAlpha: 0.07)
+      return EdgeBloomMetrics(depth: 8, edgeAlpha: 0.12, middleAlpha: 0.04, hairlineAlpha: 0.18)
     case .holding(let value):
       let progress = min(max(value, 0), 1)
       return EdgeBloomMetrics(
-        depth: 6 + 16 * progress,
-        edgeAlpha: 0.045 + 0.05 * progress,
-        middleAlpha: 0.012 + 0.018 * progress,
-        hairlineAlpha: 0.06 + 0.06 * progress
+        depth: 8 + 20 * progress,
+        edgeAlpha: 0.10 + 0.12 * progress,
+        middleAlpha: 0.035 + 0.045 * progress,
+        hairlineAlpha: 0.16 + 0.12 * progress
       )
     case .confirmed(let value):
       let progress = min(max(value, 0), 1)
@@ -159,10 +159,10 @@ struct EdgeBloomMetrics: Equatable {
       let fadeOut = max(1 - max(progress - 0.28, 0) / 0.72, 0)
       let intensity = fadeIn * fadeOut
       return EdgeBloomMetrics(
-        depth: 5 + 19 * Self.easeOutCubic(progress),
-        edgeAlpha: 0.10 * intensity,
-        middleAlpha: 0.03 * intensity,
-        hairlineAlpha: 0.13 * intensity
+        depth: 6 + 22 * Self.easeOutCubic(progress),
+        edgeAlpha: 0.24 * intensity,
+        middleAlpha: 0.085 * intensity,
+        hairlineAlpha: 0.32 * intensity
       )
     }
   }

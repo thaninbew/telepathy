@@ -554,7 +554,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         return
       }
 
-      let steps = 18
+      let steps = 24
       for step in 1...steps {
         try? await Task.sleep(for: .milliseconds(30))
         guard !Task.isCancelled else { return }

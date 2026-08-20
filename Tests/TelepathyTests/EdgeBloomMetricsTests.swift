@@ -5,9 +5,9 @@ import XCTest
 final class EdgeBloomMetricsTests: XCTestCase {
   func testCandidateBloomIsThinAndFaint() {
     let metrics = EdgeBloomMetrics.resolve(.candidate)
-    XCTAssertEqual(metrics.depth, 6)
-    XCTAssertLessThanOrEqual(metrics.edgeAlpha, 0.055)
-    XCTAssertLessThanOrEqual(metrics.hairlineAlpha, 0.07)
+    XCTAssertEqual(metrics.depth, 8)
+    XCTAssertLessThanOrEqual(metrics.edgeAlpha, 0.12)
+    XCTAssertLessThanOrEqual(metrics.hairlineAlpha, 0.18)
   }
 
   func testDwellProgressGrowsWithoutLargeBrightnessJump() {
@@ -15,7 +15,7 @@ final class EdgeBloomMetricsTests: XCTestCase {
     let end = EdgeBloomMetrics.resolve(.holding(progress: 1))
     XCTAssertLessThan(start.depth, end.depth)
     XCTAssertLessThan(start.edgeAlpha, end.edgeAlpha)
-    XCTAssertLessThanOrEqual(end.edgeAlpha, 0.095)
+    XCTAssertLessThanOrEqual(end.edgeAlpha, 0.22)
   }
 
   func testConfirmedBloomCreepsInThenFadesOut() {
