@@ -27,7 +27,7 @@ enum ActivationMode: String, CaseIterable, Codable {
   func title(shortcutName: String) -> String {
     switch self {
     case .automatic: "Automatic"
-    case .hold: "Hold"
+    case .hold: "Dwell (650 ms)"
     case .keyboard: "Keyboard (\(shortcutName))"
     case .mouse: "Middle mouse button"
     }
@@ -36,8 +36,8 @@ enum ActivationMode: String, CaseIterable, Codable {
   func detail(shortcutName: String) -> String {
     switch self {
     case .automatic: "Switch after the configured delay."
-    case .hold: "Keep facing the screen until the 650 ms bloom completes."
-    case .keyboard: "Face a screen, then press \(shortcutName). Change it below."
+    case .hold: "Dwell on a display for 650 ms. No key or click required."
+    case .keyboard: "Face a display, then press or hold \(shortcutName). Change it below."
     case .mouse: "Face a screen, then press the middle mouse button."
     }
   }
@@ -47,7 +47,8 @@ struct ShortcutBinding: Codable, Equatable {
   let keyCode: Int64
   let displayName: String
 
-  static let defaultValue = ShortcutBinding(keyCode: 60, displayName: "Right Shift")
+  static let defaultValue = ShortcutBinding(keyCode: 56, displayName: "Left Shift")
+  static let legacyRightShiftDefault = ShortcutBinding(keyCode: 60, displayName: "Right Shift")
 }
 
 struct GazePrediction: Equatable {

@@ -5,7 +5,7 @@ import Foundation
 enum DisplayFeedbackPhase: Equatable {
   case candidate
   case holding(progress: Double)
-  case confirmed(intensity: Double)
+  case confirmed(progress: Double)
 }
 
 @MainActor
@@ -21,8 +21,17 @@ final class DebugOverlayController {
   private var snapshot = DebugOverlaySnapshot(
     indicatorPoint: nil,
     displayFrame: nil,
-    feedbackPhase: nil
+    feedbackPhase: nil,
+    accentColor: OverlayStyle.accent
   )
+
+  var accentColor = OverlayStyle.accent {
+    didSet {
+      guard !accentColor.isEqual(oldValue) else { return }
+      snapshot.accentColor = accentColor
+      applySnapshot()
+    }
+  }
 
   var isVisible = true {
     didSet {
@@ -66,7 +75,8 @@ final class DebugOverlayController {
     snapshot = DebugOverlaySnapshot(
       indicatorPoint: indicatorPoint,
       displayFrame: displayFrame.map(DesktopGeometry.appKitRect(fromQuartz:)),
-      feedbackPhase: feedbackPhase
+      feedbackPhase: feedbackPhase,
+      accentColor: accentColor
     )
     applySnapshot()
   }
@@ -122,13 +132,52 @@ private struct DebugOverlaySnapshot {
   var indicatorPoint: CGPoint?
   var displayFrame: CGRect?
   var feedbackPhase: DisplayFeedbackPhase?
+  var accentColor: NSColor
+}
+
+struct EdgeBloomMetrics: Equatable {
+  let depth: Double
+  let edgeAlpha: Double
+  let middleAlpha: Double
+  let hairlineAlpha: Double
+
+  static func resolve(_ phase: DisplayFeedbackPhase) -> EdgeBloomMetrics {
+    switch phase {
+    case .candidate:
+      return EdgeBloomMetrics(depth: 6, edgeAlpha: 0.055, middleAlpha: 0.018, hairlineAlpha: 0.07)
+    case .holding(let value):
+      let progress = min(max(value, 0), 1)
+      return EdgeBloomMetrics(
+        depth: 6 + 16 * progress,
+        edgeAlpha: 0.045 + 0.05 * progress,
+        middleAlpha: 0.012 + 0.018 * progress,
+        hairlineAlpha: 0.06 + 0.06 * progress
+      )
+    case .confirmed(let value):
+      let progress = min(max(value, 0), 1)
+      let fadeIn = min(progress / 0.28, 1)
+      let fadeOut = max(1 - max(progress - 0.28, 0) / 0.72, 0)
+      let intensity = fadeIn * fadeOut
+      return EdgeBloomMetrics(
+        depth: 5 + 19 * Self.easeOutCubic(progress),
+        edgeAlpha: 0.10 * intensity,
+        middleAlpha: 0.03 * intensity,
+        hairlineAlpha: 0.13 * intensity
+      )
+    }
+  }
+
+  private static func easeOutCubic(_ value: Double) -> Double {
+    1 - pow(1 - value, 3)
+  }
 }
 
 private final class DebugOverlayView: NSView {
   var snapshot = DebugOverlaySnapshot(
     indicatorPoint: nil,
     displayFrame: nil,
-    feedbackPhase: nil
+    feedbackPhase: nil,
+    accentColor: OverlayStyle.accent
   )
 
   override var isFlipped: Bool { false }
@@ -171,51 +220,69 @@ private final class DebugOverlayView: NSView {
     phase: DisplayFeedbackPhase,
     context: CGContext
   ) {
-    let frame = local(globalFrame).insetBy(dx: 7, dy: 7)
-    let path = CGPath(
-      roundedRect: frame,
-      cornerWidth: 18,
-      cornerHeight: 18,
-      transform: nil
+    let frame = local(globalFrame).intersection(bounds)
+    guard !frame.isNull, frame.width > 1, frame.height > 1 else { return }
+
+    let metrics = EdgeBloomMetrics.resolve(phase)
+    let depth = CGFloat(min(metrics.depth, Double(min(frame.width, frame.height) / 3)))
+    let accent = snapshot.accentColor
+    guard
+      let gradient = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+          accent.withAlphaComponent(metrics.edgeAlpha).cgColor,
+          accent.withAlphaComponent(metrics.middleAlpha).cgColor,
+          accent.withAlphaComponent(0).cgColor,
+        ] as CFArray,
+        locations: [0, 0.36, 1]
+      )
+    else { return }
+
+    drawEdgeGradient(
+      in: CGRect(x: frame.minX, y: frame.maxY - depth, width: frame.width, height: depth),
+      from: CGPoint(x: frame.midX, y: frame.maxY),
+      to: CGPoint(x: frame.midX, y: frame.maxY - depth),
+      gradient: gradient,
+      context: context
+    )
+    drawEdgeGradient(
+      in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: depth),
+      from: CGPoint(x: frame.midX, y: frame.minY),
+      to: CGPoint(x: frame.midX, y: frame.minY + depth),
+      gradient: gradient,
+      context: context
+    )
+    drawEdgeGradient(
+      in: CGRect(x: frame.minX, y: frame.minY, width: depth, height: frame.height),
+      from: CGPoint(x: frame.minX, y: frame.midY),
+      to: CGPoint(x: frame.minX + depth, y: frame.midY),
+      gradient: gradient,
+      context: context
+    )
+    drawEdgeGradient(
+      in: CGRect(x: frame.maxX - depth, y: frame.minY, width: depth, height: frame.height),
+      from: CGPoint(x: frame.maxX, y: frame.midY),
+      to: CGPoint(x: frame.maxX - depth, y: frame.midY),
+      gradient: gradient,
+      context: context
     )
 
-    let progress: Double
-    let intensity: Double
-    switch phase {
-    case .candidate:
-      progress = 0.12
-      intensity = 0.38
-    case .holding(let value):
-      progress = min(max(value, 0), 1)
-      intensity = 0.38 + 0.38 * progress
-    case .confirmed(let value):
-      progress = 1
-      intensity = min(max(value, 0), 1)
-    }
+    context.setStrokeColor(accent.withAlphaComponent(metrics.hairlineAlpha).cgColor)
+    context.setLineWidth(1)
+    context.stroke(frame.insetBy(dx: 0.5, dy: 0.5))
+  }
 
-    context.setBlendMode(.screen)
-    context.addPath(path)
-    context.setStrokeColor(
-      OverlayStyle.accent.withAlphaComponent(0.07 + 0.10 * intensity).cgColor)
-    context.setLineWidth(12 + 14 * progress)
-    context.setShadow(
-      offset: .zero,
-      blur: 18 + 10 * progress,
-      color: OverlayStyle.accent.withAlphaComponent(0.20 * intensity).cgColor
-    )
-    context.strokePath()
-
-    context.setShadow(offset: .zero, blur: 7, color: OverlayStyle.accent.cgColor)
-    context.addPath(path)
-    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.18 + 0.32 * intensity).cgColor)
-    context.setLineWidth(3 + 4 * progress)
-    context.strokePath()
-
-    context.setShadow(offset: .zero, blur: 0)
-    context.addPath(path)
-    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.55 + 0.30 * intensity).cgColor)
-    context.setLineWidth(1.1 + 0.8 * progress)
-    context.strokePath()
+  private func drawEdgeGradient(
+    in rect: CGRect,
+    from start: CGPoint,
+    to end: CGPoint,
+    gradient: CGGradient,
+    context: CGContext
+  ) {
+    context.saveGState()
+    context.clip(to: rect)
+    context.drawLinearGradient(gradient, start: start, end: end, options: [])
+    context.restoreGState()
   }
 
   private func drawGazeIndicator(globalPoint: CGPoint, context: CGContext) {
@@ -226,7 +293,7 @@ private final class DebugOverlayView: NSView {
       width: OverlayStyle.indicatorRadius * 2,
       height: OverlayStyle.indicatorRadius * 2
     )
-    context.setStrokeColor(OverlayStyle.accentMuted.cgColor)
+    context.setStrokeColor(snapshot.accentColor.withAlphaComponent(0.58).cgColor)
     context.setLineWidth(OverlayStyle.indicatorLineWidth)
     context.strokeEllipse(in: area)
 
@@ -236,7 +303,7 @@ private final class DebugOverlayView: NSView {
       width: OverlayStyle.indicatorCenterRadius * 2,
       height: OverlayStyle.indicatorCenterRadius * 2
     )
-    context.setFillColor(OverlayStyle.accent.cgColor)
+    context.setFillColor(snapshot.accentColor.cgColor)
     context.fillEllipse(in: center)
   }
 }

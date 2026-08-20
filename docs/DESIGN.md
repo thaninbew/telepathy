@@ -55,13 +55,14 @@ recent explicit choice.
 
 Every activation method drives one state machine: `idle -> settling -> armed ->
 commit`. Changing the candidate display resets the state. Physical mouse motion
-and the post-transfer cooldown remain authoritative.
+and the post-transfer cooldown remain authoritative. Settling is deliberately
+invisible so classifier indecision never becomes desktop flicker.
 
 - **Automatic:** commit after the configured Switch delay.
-- **Hold:** keep facing the candidate display for 650 ms. The screen bloom grows
+- **Dwell (650 ms):** keep facing the candidate display for 650 ms. The screen bloom grows
   with progress, then the handoff commits without a second gesture.
-- **Keyboard:** arm the target, then press the recorded key. Right Shift is the
-  default because it is camera-independent and rarely used alone.
+- **Keyboard:** arm the target, then press or hold the recorded key. Left Shift
+  is the default and keeps its ordinary macOS meaning.
 - **Mouse:** arm the target, then press the middle mouse button.
 
 Switch delay can be Instant, 90, 150, 250, 400, or 650 ms. Confirmation events
@@ -159,21 +160,25 @@ features and labels are persisted locally.
 ## Feedback design
 
 Visual direction is instrument / monochrome: warm ink surfaces and one sparse
-gold signal. The desktop remains the dominant surface.
+accent signal. The accent can follow macOS or use one custom color across the
+control window, bloom, gaze indicator, and calibration. The desktop remains the
+dominant surface.
 
 Each display owns a click-through transparent AppKit panel so feedback works
 across real display geometry and Spaces. A temporary proximity bloom is drawn
 just inside the candidate screen perimeter:
 
-- **Candidate:** a faint, brief halo says the glance was recognized and the
+- **Candidate:** a thin, brief edge light says the stable glance was recognized and the
   target is armed.
-- **Holding:** the same halo becomes wider and brighter with hold progress.
-- **Confirmed:** a brighter soft perimeter pulse fades in about 800 ms.
+- **Dwell:** the same edge light creeps farther inward with dwell progress.
+- **Confirmed:** a soft edge light creeps inward and disappears in about 540 ms.
 
-The bloom uses layered translucent strokes and a restrained shadow, not a large
-color fill or persistent rectangle. Screen feedback can be disabled without
-turning Telepathy off. The separately smoothed gaze-area ring is off by default
-and explicitly labeled Experimental.
+The bloom is four clipped edge gradients plus a one-pixel hairline. It has no
+center-origin stroke, shadow, persistent rectangle, or settling-state render.
+The cue appears only after 180 ms of target stability; the armed cue expires
+after 420 ms. Screen feedback can be disabled without turning Telepathy off.
+The separately smoothed gaze-area ring is off by default and explicitly labeled
+Experimental.
 
 Permission and status text never appear in the desktop overlay. They belong in
 the native control window and menu-bar menu.

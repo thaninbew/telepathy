@@ -15,6 +15,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     static let shortcutDisplayName = "telepathy.shortcutDisplayName"
     static let switchDelay = "telepathy.switchDelay"
     static let autoReturnInterval = "telepathy.autoReturnInterval"
+    static let accentTheme = "telepathy.accentTheme"
   }
 
   private let camera = CameraGazeTracker()
@@ -27,12 +28,15 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private lazy var controlPanel = ControlPanelController()
   private lazy var calibrationOverlay = CalibrationOverlayController()
   private var switchPolicy = DisplaySwitchPolicy()
+  private let feedbackPresentationPolicy = FeedbackPresentationPolicy()
   private var autoReturnPolicy = AutoReturnPolicy()
 
   private var latestFeatures: GazeFeatures?
   private var latestPrediction: GazePrediction?
   private var latestDisplayPrediction: DisplayPrediction?
   private var pendingConfirmation: ConfirmationSignal = .none
+  private var pendingConfirmationDisplayID: CGDirectDisplayID?
+  private var pendingConfirmationAt: TimeInterval = -.infinity
   private var recentWindows: [CGDirectDisplayID: AccessibilityTarget] = [:]
   private var recentPointerPositions: [CGDirectDisplayID: CGPoint] = [:]
   private var currentExternalDisplayID: CGDirectDisplayID?
@@ -95,7 +99,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     didSet {
       UserDefaults.standard.set(activationMode.rawValue, forKey: DefaultsKey.activationMode)
       switchPolicy.resetCandidate()
-      pendingConfirmation = .none
+      clearPendingConfirmation()
       cancelAutoReturn()
       clearFeedback()
       refreshMenu()
@@ -108,7 +112,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       UserDefaults.standard.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
       UserDefaults.standard.set(shortcut.displayName, forKey: DefaultsKey.shortcutDisplayName)
       mouseMonitor.shortcut = shortcut
-      pendingConfirmation = .none
+      clearPendingConfirmation()
       refreshMenu()
       refreshControlPanel()
     }
@@ -119,7 +123,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       UserDefaults.standard.set(switchDelay, forKey: DefaultsKey.switchDelay)
       switchPolicy.stabilityInterval = switchDelay
       switchPolicy.resetCandidate()
-      pendingConfirmation = .none
+      clearPendingConfirmation()
       cancelAutoReturn()
       clearFeedback()
       refreshMenu()
@@ -136,6 +140,21 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
   }
 
+  private var accentTheme: AccentTheme {
+    didSet {
+      if let data = try? JSONEncoder().encode(accentTheme) {
+        UserDefaults.standard.set(data, forKey: DefaultsKey.accentTheme)
+      }
+      refreshOverlay()
+      refreshMenu()
+      refreshControlPanel()
+    }
+  }
+
+  private var resolvedAccent: AccentColor {
+    accentTheme.resolved()
+  }
+
   override init() {
     let defaults = UserDefaults.standard
     enabled = defaults.object(forKey: DefaultsKey.enabled) as? Bool ?? true
@@ -144,11 +163,18 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     warpPointer = defaults.object(forKey: DefaultsKey.warpPointer) as? Bool ?? true
     activationMode = ActivationMode(
       rawValue: defaults.string(forKey: DefaultsKey.activationMode) ?? "") ?? .automatic
+    var migratedLegacyShortcut = false
     if let keyCode = defaults.object(forKey: DefaultsKey.shortcutKeyCode) as? NSNumber,
       let displayName = defaults.string(forKey: DefaultsKey.shortcutDisplayName),
       !displayName.isEmpty
     {
-      shortcut = ShortcutBinding(keyCode: keyCode.int64Value, displayName: displayName)
+      let stored = ShortcutBinding(keyCode: keyCode.int64Value, displayName: displayName)
+      if stored == .legacyRightShiftDefault {
+        shortcut = .defaultValue
+        migratedLegacyShortcut = true
+      } else {
+        shortcut = stored
+      }
     } else {
       shortcut = .defaultValue
     }
@@ -156,7 +182,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       (defaults.object(forKey: DefaultsKey.switchDelay) as? NSNumber)?.doubleValue ?? 0.09
     autoReturnInterval =
       (defaults.object(forKey: DefaultsKey.autoReturnInterval) as? NSNumber)?.doubleValue ?? 0
+    accentTheme = defaults.data(forKey: DefaultsKey.accentTheme).flatMap {
+      try? JSONDecoder().decode(AccentTheme.self, from: $0)
+    } ?? .defaultValue
     super.init()
+    if migratedLegacyShortcut {
+      defaults.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
+      defaults.set(shortcut.displayName, forKey: DefaultsKey.shortcutDisplayName)
+    }
     switchPolicy.stabilityInterval = switchDelay
     mouseMonitor.shortcut = shortcut
     restoreCalibration()
@@ -168,6 +201,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     configureCalibration()
     configureCallbacks()
     configureDisplayObserver()
+
+    overlay.accentColor = resolvedAccent.nsColor
+    calibrationOverlay.accentColor = resolvedAccent.nsColor
 
     if accessibility.isTrusted {
       _ = mouseMonitor.start()
@@ -205,8 +241,11 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     mouseMonitor.onPointerActivity = { [weak self] point, _ in
       self?.handlePhysicalPointerActivity(at: point)
     }
-    mouseMonitor.onConfirmation = { [weak self] signal, _ in
-      self?.pendingConfirmation = signal
+    mouseMonitor.onConfirmation = { [weak self] signal, now in
+      guard let self else { return }
+      self.pendingConfirmation = signal
+      self.pendingConfirmationAt = now
+      self.pendingConfirmationDisplayID = self.latestDisplayPrediction?.displayID
     }
     mouseMonitor.onEmergencyToggle = { [weak self] in
       guard let self else { return }
@@ -263,30 +302,57 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       prediction.confidence >= 0.52
     else {
       switchPolicy.resetCandidate()
-      pendingConfirmation = .none
+      clearPendingConfirmation()
       updateFeedback(for: DisplaySwitchDecision(targetDisplayID: nil, phase: .idle), now: now)
       return
     }
 
     if autoReturnPolicy.shouldSuppress(prediction.displayID) {
       switchPolicy.resetCandidate()
-      pendingConfirmation = .none
+      clearPendingConfirmation()
       updateFeedback(for: DisplaySwitchDecision(targetDisplayID: nil, phase: .idle), now: now)
       return
     }
 
+    let signal = confirmationSignal(for: prediction.displayID, now: now)
     let decision = switchPolicy.evaluate(
       targetDisplayID: prediction.displayID,
       currentDisplayID: currentExternalDisplayID,
       mode: activationMode,
       now: now,
       lastPhysicalMouseActivity: mouseMonitor.lastPhysicalMouseActivity,
-      signal: pendingConfirmation
+      signal: signal
     )
-    pendingConfirmation = .none
     updateFeedback(for: decision, now: now)
     guard decision.phase == .commit, let displayID = decision.targetDisplayID else { return }
+    clearPendingConfirmation()
     transfer(to: displayID, now: now)
+  }
+
+  private func confirmationSignal(
+    for displayID: CGDirectDisplayID,
+    now: TimeInterval
+  ) -> ConfirmationSignal {
+    if activationMode == .keyboard, mouseMonitor.isShortcutPressed {
+      return .keyboard
+    }
+
+    guard pendingConfirmation != .none else { return .none }
+    guard now - pendingConfirmationAt <= ConfirmationTiming.latchInterval(switchDelay: switchDelay)
+    else {
+      clearPendingConfirmation()
+      return .none
+    }
+    guard pendingConfirmationDisplayID == nil || pendingConfirmationDisplayID == displayID else {
+      return .none
+    }
+    return pendingConfirmation
+  }
+
+  private func clearPendingConfirmation() {
+    pendingConfirmation = .none
+    pendingConfirmationDisplayID = nil
+    pendingConfirmationAt = -.infinity
   }
 
   private func rememberFocusedContext() {
@@ -438,6 +504,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func refreshOverlay() {
+    overlay.accentColor = resolvedAccent.nsColor
     let gazePoint = debugOverlayEnabled ? latestPrediction?.smoothedPoint : nil
     let phase = screenFeedbackEnabled ? feedbackPhase : nil
     overlay.isVisible = enabled && !isCalibrating && (gazePoint != nil || phase != nil)
@@ -449,6 +516,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func updateFeedback(for decision: DisplaySwitchDecision, now: TimeInterval) {
+    guard feedbackTask == nil else { return }
     guard screenFeedbackEnabled,
       let displayID = decision.targetDisplayID,
       let display = DesktopGeometry.activeDisplays.first(where: { $0.id == displayID })
@@ -460,44 +528,48 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       return
     }
 
-    feedbackDisplayFrame = display.bounds
-    switch decision.phase {
-    case .idle:
-      feedbackPhase = nil
-    case .settling:
-      feedbackPhase = .candidate
-    case .armed:
-      if let since = switchPolicy.candidateSince, now - since <= 0.62 {
-        feedbackPhase = .candidate
-      } else {
-        feedbackPhase = nil
-      }
-    case .holding(let progress):
-      feedbackPhase = .holding(progress: progress)
-    case .commit:
-      break
-    }
+    let phase = feedbackPresentationPolicy.phase(
+      for: decision,
+      candidateSince: switchPolicy.candidateSince,
+      stabilityInterval: switchDelay,
+      now: now
+    )
+    feedbackDisplayFrame = phase == nil ? nil : display.bounds
+    feedbackPhase = phase
   }
 
   private func showConfirmedFeedback(on display: ActiveDisplay) {
     guard screenFeedbackEnabled else { return }
     feedbackTask?.cancel()
     feedbackDisplayFrame = display.bounds
-    feedbackPhase = .confirmed(intensity: 1)
+    feedbackPhase = .confirmed(progress: 0)
     refreshOverlay()
     feedbackTask = Task { [weak self] in
-      let steps = 24
-      for step in 1...steps {
-        try? await Task.sleep(for: .milliseconds(34))
+      if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        self?.feedbackPhase = .confirmed(progress: 0.28)
+        self?.refreshOverlay()
+        try? await Task.sleep(for: .milliseconds(280))
         guard !Task.isCancelled else { return }
-        self?.feedbackPhase = .confirmed(intensity: 1 - Double(step) / Double(steps))
+        self?.finishFeedbackAnimation()
+        return
+      }
+
+      let steps = 18
+      for step in 1...steps {
+        try? await Task.sleep(for: .milliseconds(30))
+        guard !Task.isCancelled else { return }
+        self?.feedbackPhase = .confirmed(progress: Double(step) / Double(steps))
         self?.refreshOverlay()
       }
-      self?.feedbackTask = nil
-      self?.feedbackDisplayFrame = nil
-      self?.feedbackPhase = nil
-      self?.refreshOverlay()
+      self?.finishFeedbackAnimation()
     }
+  }
+
+  private func finishFeedbackAnimation() {
+    feedbackTask = nil
+    feedbackDisplayFrame = nil
+    feedbackPhase = nil
+    refreshOverlay()
   }
 
   private func clearFeedback() {
@@ -535,6 +607,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     controlPanel.onAutoReturnChanged = { [weak self] interval in
       guard let self, abs(self.autoReturnInterval - interval) > 0.001 else { return }
       self.autoReturnInterval = interval
+    }
+    controlPanel.onAccentSourceChanged = { [weak self] source in
+      guard let self, self.accentTheme.source != source else { return }
+      self.accentTheme.source = source
+    }
+    controlPanel.onCustomAccentChanged = { [weak self] color in
+      guard let self, self.accentTheme.customColor != color else { return }
+      self.accentTheme.customColor = color
     }
     controlPanel.onRequestAccessibility = { [weak self] in
       self?.requestAccessibility()
@@ -760,7 +840,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         enabled: enabled,
         status: "Calibrating",
         detail:
-          "Follow the gold target across \(calibrationOverlay.displayCount) active displays. Press Esc to cancel.",
+          "Follow the colored target across \(calibrationOverlay.displayCount) active displays. Press Esc to cancel.",
         gazeIndicatorEnabled: debugOverlayEnabled,
         calibrationButtonTitle: "Calibrating…",
         calibrationEnabled: false,
@@ -816,6 +896,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     state.shortcut = shortcut
     state.switchDelay = switchDelay
     state.autoReturnInterval = autoReturnInterval
+    state.accentTheme = accentTheme
+    state.resolvedAccent = resolvedAccent
     state.quickRecenterEnabled = trackingReady && calibrationEnabled
     controlPanel.update(state)
   }
@@ -954,7 +1036,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if mode == .full {
       alert.messageText = trackingReady ? "Run Full Calibration again?" : "Run Full Calibration?"
       alert.informativeText =
-        "Follow the gold target across \(displays) active \(displays == 1 ? "display" : "displays"). During Posture Range, move naturally in your chair while keeping the ring in view. Telepathy then learns screen coverage and checks unseen positions before saving. The deliberate pass takes about 45 seconds with two displays, and your current profile stays saved if you cancel or the final check fails."
+        "Follow the colored target across \(displays) active \(displays == 1 ? "display" : "displays"). During Posture Range, move naturally in your chair while keeping the ring in view. Telepathy then learns screen coverage and checks unseen positions before saving. The deliberate pass takes about 45 seconds with two displays, and your current profile stays saved if you cancel or the final check fails."
     } else {
       alert.messageText = "Quick Recenter Telepathy?"
       alert.informativeText =
@@ -970,6 +1052,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     cancelAutoReturn()
     clearFeedback()
     controlPanel.dismiss()
+    calibrationOverlay.accentColor = resolvedAccent.nsColor
     refreshOverlay()
     refreshMenu()
     refreshControlPanel()

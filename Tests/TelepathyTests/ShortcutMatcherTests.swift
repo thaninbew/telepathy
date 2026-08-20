@@ -4,11 +4,16 @@ import XCTest
 @testable import Telepathy
 
 final class ShortcutMatcherTests: XCTestCase {
-  func testRightShiftConfirmsOnModifierPress() {
+  func testDefaultShortcutIsLeftShift() {
+    XCTAssertEqual(ShortcutBinding.defaultValue.keyCode, 56)
+    XCTAssertEqual(ShortcutBinding.defaultValue.displayName, "Left Shift")
+  }
+
+  func testLeftShiftConfirmsOnModifierPress() {
     XCTAssertTrue(
       ShortcutMatcher.shouldConfirm(
         type: .flagsChanged,
-        keyCode: 60,
+        keyCode: 56,
         flags: .maskShift,
         isRepeat: false,
         shortcut: .defaultValue,
@@ -17,11 +22,11 @@ final class ShortcutMatcherTests: XCTestCase {
     )
   }
 
-  func testRightShiftDoesNotConfirmOnReleaseOrRepeat() {
+  func testLeftShiftDoesNotConfirmOnReleaseOrRepeat() {
     XCTAssertFalse(
       ShortcutMatcher.shouldConfirm(
         type: .flagsChanged,
-        keyCode: 60,
+        keyCode: 56,
         flags: [],
         isRepeat: false,
         shortcut: .defaultValue,
@@ -31,7 +36,7 @@ final class ShortcutMatcherTests: XCTestCase {
     XCTAssertFalse(
       ShortcutMatcher.shouldConfirm(
         type: .flagsChanged,
-        keyCode: 60,
+        keyCode: 56,
         flags: .maskShift,
         isRepeat: false,
         shortcut: .defaultValue,

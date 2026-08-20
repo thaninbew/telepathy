@@ -46,6 +46,15 @@ final class CalibrationOverlayController {
   private var sequenceTask: Task<Void, Never>?
   private var keyMonitor: Any?
   private(set) var isRunning = false
+  var accentColor = OverlayStyle.accent {
+    didSet {
+      guard !accentColor.isEqual(oldValue) else { return }
+      for surface in surfaces {
+        surface.view.accentColor = accentColor
+        surface.view.needsDisplay = true
+      }
+    }
+  }
 
   var displayCount: Int { NSScreen.screens.count }
 
@@ -323,6 +332,7 @@ final class CalibrationOverlayController {
     }
     surfaces = NSScreen.screens.map { screen in
       let view = CalibrationOverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
+      view.accentColor = accentColor
       let panel = CalibrationPanel(
         contentRect: screen.frame,
         styleMask: [.borderless],
@@ -450,6 +460,7 @@ private struct CalibrationOverlayState {
 
 private final class CalibrationOverlayView: NSView {
   var state = CalibrationOverlayState()
+  var accentColor = OverlayStyle.accent
 
   override var isFlipped: Bool { false }
 
@@ -472,7 +483,7 @@ private final class CalibrationOverlayView: NSView {
       width: OverlayStyle.calibrationHaloRadius * 2,
       height: OverlayStyle.calibrationHaloRadius * 2
     )
-    context.setFillColor(OverlayStyle.accent.withAlphaComponent(0.12).cgColor)
+    context.setFillColor(accentColor.withAlphaComponent(0.12).cgColor)
     context.fillEllipse(in: halo)
 
     drawProgressRing(at: localPoint, context: context)
@@ -483,12 +494,12 @@ private final class CalibrationOverlayView: NSView {
       width: OverlayStyle.calibrationTargetRadius * 2,
       height: OverlayStyle.calibrationTargetRadius * 2
     )
-    context.setStrokeColor(OverlayStyle.accent.cgColor)
+    context.setStrokeColor(accentColor.cgColor)
     context.setLineWidth(2)
     context.strokeEllipse(in: target)
 
     let center = CGRect(x: localPoint.x - 2, y: localPoint.y - 2, width: 4, height: 4)
-    context.setFillColor(OverlayStyle.accent.cgColor)
+    context.setFillColor(accentColor.cgColor)
     context.fillEllipse(in: center)
 
     if let nextTargetPoint = state.nextTargetPoint {
@@ -501,7 +512,7 @@ private final class CalibrationOverlayView: NSView {
     let radius = OverlayStyle.calibrationProgressRadius
     context.setLineWidth(OverlayStyle.calibrationProgressLineWidth)
     context.setLineCap(.round)
-    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.22).cgColor)
+    context.setStrokeColor(accentColor.withAlphaComponent(0.22).cgColor)
     context.strokeEllipse(
       in: CGRect(
         x: point.x - radius,
@@ -512,7 +523,7 @@ private final class CalibrationOverlayView: NSView {
     )
 
     guard state.ringProgress > 0 else { return }
-    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.94).cgColor)
+    context.setStrokeColor(accentColor.withAlphaComponent(0.94).cgColor)
     context.addArc(
       center: point,
       radius: radius,
@@ -537,7 +548,7 @@ private final class CalibrationOverlayView: NSView {
     let tip = CGPoint(x: start.x + unit.x * 76, y: start.y + unit.y * 76)
     let perpendicular = CGPoint(x: -unit.y, y: unit.x)
 
-    context.setStrokeColor(OverlayStyle.accent.withAlphaComponent(0.62).cgColor)
+    context.setStrokeColor(accentColor.withAlphaComponent(0.62).cgColor)
     context.setLineWidth(1.5)
     context.setLineCap(.round)
     context.move(to: tail)

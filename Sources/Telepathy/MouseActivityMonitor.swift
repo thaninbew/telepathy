@@ -18,6 +18,10 @@ final class MouseActivityMonitor {
   private var pressedModifierKeyCodes: Set<Int64> = []
 
   var isRunning: Bool { eventTap != nil }
+  var isShortcutPressed: Bool {
+    ShortcutMatcher.modifierFlag(for: shortcut.keyCode) != nil
+      && pressedModifierKeyCodes.contains(shortcut.keyCode)
+  }
 
   func start() -> Bool {
     guard eventTap == nil else { return true }
@@ -93,10 +97,9 @@ final class MouseActivityMonitor {
           pressedModifierKeyCodes.insert(keyCode)
         }
         onConfirmation?(.keyboard, now)
-      } else if type == .flagsChanged,
-        let flag = ShortcutMatcher.modifierFlag(for: keyCode),
-        !flags.contains(flag)
-      {
+      } else if type == .flagsChanged, pressedModifierKeyCodes.contains(keyCode) {
+        // A flagsChanged event for a tracked modifier is its release. Remove it
+        // even if the matching left/right modifier keeps the aggregate flag set.
         pressedModifierKeyCodes.remove(keyCode)
       }
       return

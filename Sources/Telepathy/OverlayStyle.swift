@@ -8,8 +8,7 @@ enum OverlayStyle {
     calibratedRed: 31 / 255, green: 28 / 255, blue: 25 / 255, alpha: 1)
   static let border = NSColor(
     calibratedRed: 69 / 255, green: 63 / 255, blue: 55 / 255, alpha: 1)
-  static let accent = NSColor(calibratedRed: 224 / 255, green: 164 / 255, blue: 88 / 255, alpha: 1)
-  static let accentMuted = accent.withAlphaComponent(0.58)
+  static let accent = AccentColor.gold.nsColor
   static let ink = NSColor(calibratedRed: 22 / 255, green: 20 / 255, blue: 19 / 255, alpha: 0.88)
   static let text = NSColor(
     calibratedRed: 243 / 255, green: 238 / 255, blue: 230 / 255, alpha: 0.94)

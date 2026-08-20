@@ -13,6 +13,8 @@ struct ControlPanelState: Equatable {
   var shortcut: ShortcutBinding = .defaultValue
   var switchDelay: TimeInterval = 0.09
   var autoReturnInterval: TimeInterval = 0
+  var accentTheme: AccentTheme = .defaultValue
+  var resolvedAccent: AccentColor = .gold
   var quickRecenterEnabled: Bool = false
 }
 
@@ -25,18 +27,23 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   var onShortcutChanged: ((ShortcutBinding) -> Void)?
   var onSwitchDelayChanged: ((TimeInterval) -> Void)?
   var onAutoReturnChanged: ((TimeInterval) -> Void)?
+  var onAccentSourceChanged: ((AccentThemeSource) -> Void)?
+  var onCustomAccentChanged: ((AccentColor) -> Void)?
   var onCalibrate: (() -> Void)?
   var onQuickRecenter: (() -> Void)?
   var onRequestAccessibility: (() -> Void)?
 
-  private let powerSwitch = NSSwitch()
-  private let gazeIndicatorSwitch = NSSwitch()
-  private let screenFeedbackSwitch = NSSwitch()
+  private let powerSwitch = AccentSwitch()
+  private let gazeIndicatorSwitch = AccentSwitch()
+  private let screenFeedbackSwitch = AccentSwitch()
   private let activationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let activationDetail = NSTextField(wrappingLabelWithString: "")
-  private let shortcutButton = NSButton(title: "Right Shift", target: nil, action: nil)
+  private let shortcutButton = NSButton(title: "Left Shift", target: nil, action: nil)
   private let switchDelayPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let autoReturnPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let accentSourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let accentColorWell = NSColorWell()
+  private let headerImage = NSImageView()
   private let statusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
@@ -52,7 +59,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
 
   init() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 468, height: 760),
+      contentRect: NSRect(x: 0, y: 0, width: 468, height: 780),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -104,6 +111,10 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     if shortcutMonitor == nil { shortcutButton.title = state.shortcut.displayName }
     selectPopup(switchDelayPopup, value: state.switchDelay)
     selectPopup(autoReturnPopup, value: state.autoReturnInterval)
+    selectAccentSource(state.accentTheme.source)
+    accentColorWell.color = state.accentTheme.customColor.nsColor
+    accentColorWell.isEnabled = state.accentTheme.source == .custom
+    applyAccent(state.resolvedAccent.nsColor)
     statusLabel.stringValue = state.status
     detailLabel.stringValue = state.detail
     calibrationButton.title = state.calibrationButtonTitle
@@ -112,7 +123,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     permissionButton.isHidden = state.accessibilityReady
     statusDot.color =
       state.enabled && state.accessibilityReady
-      ? OverlayStyle.accent
+      ? state.resolvedAccent.nsColor
       : OverlayStyle.idle
     statusDot.needsDisplay = true
   }
@@ -123,15 +134,15 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     let root = NSStackView()
     root.orientation = .vertical
     root.alignment = .leading
-    root.spacing = OverlayStyle.space6
+    root.spacing = 20
     root.translatesAutoresizingMaskIntoConstraints = false
     contentView.addSubview(root)
 
     NSLayoutConstraint.activate([
       root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 32),
       root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -32),
-      root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 32),
-      root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -32),
+      root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 28),
+      root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -28),
     ])
 
     for view in [makeHeader(), makeControlsSection(), makeStatusSection(), makeGuide()] {
@@ -150,17 +161,16 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 
   private func makeHeader() -> NSView {
-    let image = NSImageView()
-    image.image = NSImage(
+    headerImage.image = NSImage(
       systemSymbolName: "eye.circle.fill",
       accessibilityDescription: "Telepathy"
     )
-    image.contentTintColor = OverlayStyle.accent
-    image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 28, weight: .medium)
-    image.translatesAutoresizingMaskIntoConstraints = false
+    headerImage.contentTintColor = OverlayStyle.accent
+    headerImage.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 28, weight: .medium)
+    headerImage.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      image.widthAnchor.constraint(equalToConstant: 36),
-      image.heightAnchor.constraint(equalToConstant: 36),
+      headerImage.widthAnchor.constraint(equalToConstant: 36),
+      headerImage.heightAnchor.constraint(equalToConstant: 36),
     ])
 
     let title = makeLabel(
@@ -178,7 +188,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     copy.alignment = .leading
     copy.spacing = OverlayStyle.space1
 
-    let header = NSStackView(views: [image, copy])
+    let header = NSStackView(views: [headerImage, copy])
     header.orientation = .horizontal
     header.alignment = .centerY
     header.spacing = OverlayStyle.space3
@@ -223,6 +233,22 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       accessibilityLabel: "Auto-return"
     )
 
+    for source in AccentThemeSource.allCases {
+      accentSourcePopup.addItem(withTitle: source.title)
+      accentSourcePopup.lastItem?.representedObject = source.rawValue
+    }
+    accentSourcePopup.target = self
+    accentSourcePopup.action = #selector(accentSourceChanged)
+    accentSourcePopup.setAccessibilityLabel("Accent color source")
+
+    accentColorWell.target = self
+    accentColorWell.action = #selector(customAccentChanged)
+    accentColorWell.supportsAlpha = false
+    accentColorWell.setAccessibilityLabel("Custom accent color")
+    if #available(macOS 13.0, *) {
+      accentColorWell.colorWellStyle = .minimal
+    }
+
     let focusRow = makeToggleRow(
       title: "Display handoff",
       explanation: "Turn toward another screen to restore its recent window and pointer.",
@@ -244,9 +270,18 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       explanation: "Return to the previous screen unless physical mouse input adopts this one.",
       control: autoReturnPopup
     )
+    let accentControls = NSStackView(views: [accentSourcePopup, accentColorWell])
+    accentControls.orientation = .horizontal
+    accentControls.alignment = .centerY
+    accentControls.spacing = OverlayStyle.space2
+    let accentRow = makeSettingRow(
+      title: "Accent color",
+      explanation: "Use the macOS accent or one custom color across feedback and controls.",
+      control: accentControls
+    )
     let feedbackRow = makeToggleRow(
       title: "Screen bloom",
-      explanation: "Briefly show an armed, holding, or completed screen handoff.",
+      explanation: "Briefly show an armed, dwelling, or completed screen handoff.",
       control: screenFeedbackSwitch
     )
     let indicatorRow = makeToggleRow(
@@ -254,21 +289,22 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       explanation: "Show the fine eye-and-head estimate used by the research mode.",
       control: gazeIndicatorSwitch
     )
-    let dividers = (0..<6).map { _ -> NSBox in
+    let dividers = (0..<7).map { _ -> NSBox in
       let divider = NSBox()
       divider.boxType = .separator
       return divider
     }
     let rows: [NSView] = [
       focusRow, dividers[0], activationRow, dividers[1], shortcutRow, dividers[2], delayRow,
-      dividers[3], autoReturnRow, dividers[4], feedbackRow, dividers[5], indicatorRow,
+      dividers[3], autoReturnRow, dividers[4], accentRow, dividers[5], feedbackRow, dividers[6],
+      indicatorRow,
     ]
     let stack = NSStackView(
       views: rows
     )
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = OverlayStyle.space3
+    stack.spacing = 10
     for view in rows {
       view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
@@ -304,7 +340,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private func makeToggleRow(
     title: String,
     explanation: String,
-    control: NSSwitch
+    control: AccentSwitch
   ) -> NSView {
     let titleLabel = makeLabel(
       title,
@@ -334,7 +370,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private func makeSettingRow(
     title: String,
     explanation: String,
-    control: NSControl
+    control: NSView
   ) -> NSView {
     let titleLabel = makeLabel(
       title,
@@ -521,6 +557,18 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     onAutoReturnChanged?(value.doubleValue)
   }
 
+  @objc private func accentSourceChanged() {
+    guard let rawValue = accentSourcePopup.selectedItem?.representedObject as? String,
+      let source = AccentThemeSource(rawValue: rawValue)
+    else { return }
+    accentColorWell.isEnabled = source == .custom
+    onAccentSourceChanged?(source)
+  }
+
+  @objc private func customAccentChanged() {
+    onCustomAccentChanged?(AccentColor(color: accentColorWell.color))
+  }
+
   private func finishShortcutRecording(with binding: ShortcutBinding?) {
     if let shortcutMonitor {
       NSEvent.removeMonitor(shortcutMonitor)
@@ -572,6 +620,23 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       return abs(number.doubleValue - value) < 0.001
     }) else { return }
     popup.selectItem(at: index)
+  }
+
+  private func selectAccentSource(_ source: AccentThemeSource) {
+    guard let index = accentSourcePopup.itemArray.firstIndex(where: {
+      ($0.representedObject as? String) == source.rawValue
+    }) else { return }
+    accentSourcePopup.selectItem(at: index)
+  }
+
+  private func applyAccent(_ accent: NSColor) {
+    headerImage.contentTintColor = accent
+    powerSwitch.accentColor = accent
+    screenFeedbackSwitch.accentColor = accent
+    gazeIndicatorSwitch.accentColor = accent
+    permissionButton.contentTintColor = accent
+    calibrationButton.contentTintColor = accent
+    quickRecenterButton.contentTintColor = accent
   }
 
   private static func shortcutBinding(from event: NSEvent) -> ShortcutBinding? {
