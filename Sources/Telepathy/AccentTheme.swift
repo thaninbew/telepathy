@@ -51,16 +51,26 @@ struct AccentColor: Codable, Equatable {
 
     for step in 1...20 {
       let amount = Double(step) / 20
-      let candidate = AccentColor(
+      let lighter = AccentColor(
         red: red + (1 - red) * amount,
         green: green + (1 - green) * amount,
         blue: blue + (1 - blue) * amount
       )
-      if candidate.contrastRatio(against: background) >= minimumRatio {
-        return candidate
+      let darker = AccentColor(
+        red: red * (1 - amount),
+        green: green * (1 - amount),
+        blue: blue * (1 - amount)
+      )
+      let lighterRatio = lighter.contrastRatio(against: background)
+      let darkerRatio = darker.contrastRatio(against: background)
+      if lighterRatio >= minimumRatio || darkerRatio >= minimumRatio {
+        return lighterRatio >= darkerRatio ? lighter : darker
       }
     }
-    return AccentColor(red: 1, green: 1, blue: 1)
+    let light = AccentColor(red: 1, green: 1, blue: 1)
+    let dark = AccentColor(red: 0, green: 0, blue: 0)
+    return light.contrastRatio(against: background) >= dark.contrastRatio(against: background)
+      ? light : dark
   }
 
   func contrastRatio(against other: AccentColor) -> Double {
