@@ -12,9 +12,9 @@ continue through macOS unchanged. Camera processing stays on the Mac.
 - Last eligible window and last physical pointer position remembered per display.
 - Automatic, dwell, configurable-keyboard, and middle-mouse activation.
 - Left Shift default shortcut, configurable Switch delay, and optional Auto-return.
-- A stable-only edge bloom for armed, dwell-progress, and confirmed states.
-- A macOS or custom accent shared by the app, bloom, indicator, and calibration.
-- Independent controls for the bloom, pointer transfer, and Experimental gaze ring.
+- A stable-only edge shine for armed, dwell-progress, and confirmed states.
+- A macOS or custom accent shared by the app, shine, indicator, and calibration.
+- Independent controls for the shine, pointer transfer, and Experimental gaze ring.
 - Saved Full Calibration profiles plus Quick Recenter for posture changes.
 - Physical mouse suppression and `Command-Option-Escape` emergency pause.
 
@@ -52,11 +52,18 @@ restore the previous display after one to five seconds; physical mouse movement
 or a click on the temporary display cancels that return and adopts it. Both
 settings persist across relaunches.
 
-The screen bloom is on by default. It waits for a stable target, creeps inward
-from the physical display edge, and fades quickly. Choose the macOS accent or a
+The screen shine is on by default. A broad, five-stop light waits for a stable
+target, creeps inward from the physical display edge, and fades quickly. It has
+no perimeter stroke, blur, or persistent full-screen surface. Choose the macOS accent or a
 custom color in Telepathy; unreadably dark colors are lifted only as much as
 needed for visible controls. The exact gaze-area ring is off by default because
 fine eye-driven selection remains Experimental.
+
+Normal handoff uses a 15 fps head-only Vision request. Full eye landmarks run
+only during calibration or when the Experimental gaze indicator is enabled.
+Telepathy stops camera capture while Off, asleep, locked, untrusted, or unable
+to hand off between displays. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
+for the runtime budget and measurement procedure.
 
 For development, `./scripts/build-app.sh debug` produces `build/Telepathy.app`.
 The product contract and edge-case policy live in [`docs/DESIGN.md`](docs/DESIGN.md).

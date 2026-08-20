@@ -44,15 +44,26 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var feedbackPhase: DisplayFeedbackPhase?
   private var feedbackTask: Task<Void, Never>?
   private var autoReturnTask: Task<Void, Never>?
+  private var activeDisplays = DesktopGeometry.activeDisplays
+  private var desktopBounds = DesktopGeometry.quartzBounds
   private var currentLayoutFingerprint = DesktopGeometry.layoutFingerprint
   private var displayObserver: NSObjectProtocol?
+  private var appActivationObserver: NSObjectProtocol?
+  private var workspaceObservers: [NSObjectProtocol] = []
+  private var runtimeSuspension = RuntimeSuspensionState()
+  private var wantsCameraRunning = false
+  private var lastFocusedContextCheckAt: TimeInterval = -.infinity
   private var isCalibrating = false
   private var cameraState: CameraGazeTracker.State = .stopped
   private var statusItem: NSStatusItem?
   private var menu: NSMenu?
 
+  private var runtimeSuspended: Bool {
+    runtimeSuspension.isSuspended
+  }
+
   private var trackingReady: Bool {
-    mapper.isReady && (DesktopGeometry.activeDisplays.count < 2 || displayClassifier.isReady)
+    mapper.isReady && (activeDisplays.count < 2 || displayClassifier.isReady)
   }
 
   private var enabled: Bool {
@@ -63,6 +74,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         cancelAutoReturn()
         clearFeedback()
       }
+      updateCameraRunningState()
       refreshOverlay()
       refreshMenu()
       refreshControlPanel()
@@ -72,6 +84,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private var debugOverlayEnabled: Bool {
     didSet {
       UserDefaults.standard.set(debugOverlayEnabled, forKey: DefaultsKey.debugOverlay)
+      updateCameraRunningState()
       refreshOverlay()
       refreshMenu()
       refreshControlPanel()
@@ -161,8 +174,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     debugOverlayEnabled = defaults.object(forKey: DefaultsKey.debugOverlay) as? Bool ?? false
     screenFeedbackEnabled = defaults.object(forKey: DefaultsKey.screenFeedback) as? Bool ?? true
     warpPointer = defaults.object(forKey: DefaultsKey.warpPointer) as? Bool ?? true
-    activationMode = ActivationMode(
-      rawValue: defaults.string(forKey: DefaultsKey.activationMode) ?? "") ?? .automatic
+    activationMode =
+      ActivationMode(
+        rawValue: defaults.string(forKey: DefaultsKey.activationMode) ?? "") ?? .automatic
     var migratedLegacyShortcut = false
     if let keyCode = defaults.object(forKey: DefaultsKey.shortcutKeyCode) as? NSNumber,
       let displayName = defaults.string(forKey: DefaultsKey.shortcutDisplayName),
@@ -182,9 +196,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       (defaults.object(forKey: DefaultsKey.switchDelay) as? NSNumber)?.doubleValue ?? 0.09
     autoReturnInterval =
       (defaults.object(forKey: DefaultsKey.autoReturnInterval) as? NSNumber)?.doubleValue ?? 0
-    accentTheme = defaults.data(forKey: DefaultsKey.accentTheme).flatMap {
-      try? JSONDecoder().decode(AccentTheme.self, from: $0)
-    } ?? .defaultValue
+    accentTheme =
+      defaults.data(forKey: DefaultsKey.accentTheme).flatMap {
+        try? JSONDecoder().decode(AccentTheme.self, from: $0)
+      } ?? .defaultValue
     super.init()
     if migratedLegacyShortcut {
       defaults.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
@@ -201,6 +216,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     configureCalibration()
     configureCallbacks()
     configureDisplayObserver()
+    configureRuntimeObservers()
 
     overlay.accentColor = resolvedAccent.nsColor
     calibrationOverlay.accentColor = resolvedAccent.nsColor
@@ -208,7 +224,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if accessibility.isTrusted {
       _ = mouseMonitor.start()
     }
-    camera.start()
+    updateCameraRunningState()
     refreshOverlay()
     refreshMenu()
     refreshControlPanel()
@@ -221,6 +237,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     feedbackTask?.cancel()
     autoReturnTask?.cancel()
     calibrationOverlay.stop()
+    removeRuntimeObservers()
     camera.stop()
     mouseMonitor.stop()
   }
@@ -254,8 +271,13 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func consume(_ features: GazeFeatures) {
+    guard
+      CameraRuntimePolicy.shouldConsumeFeatures(
+        cameraWanted: wantsCameraRunning,
+        suspended: runtimeSuspended
+      )
+    else { return }
     latestFeatures = features
-    let bounds = DesktopGeometry.quartzBounds
 
     if accessibility.isTrusted, !mouseMonitor.isRunning {
       _ = mouseMonitor.start()
@@ -263,13 +285,16 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
     guard !isCalibrating else { return }
 
-    updateExperimentalGazePrediction(features: features, bounds: bounds)
-    rememberFocusedContext()
+    if debugOverlayEnabled {
+      updateExperimentalGazePrediction(features: features, bounds: desktopBounds)
+    } else {
+      latestPrediction = nil
+    }
+    rememberFocusedContext(now: features.timestamp)
 
     latestDisplayPrediction = displayClassifier.predict(features: features)
     transferDisplayIfNeeded(now: features.timestamp)
-    refreshOverlay()
-    refreshControlPanel()
+    if debugOverlayEnabled { refreshOverlay() }
   }
 
   private func updateExperimentalGazePrediction(features: GazeFeatures, bounds: CGRect) {
@@ -355,23 +380,27 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     pendingConfirmationAt = -.infinity
   }
 
-  private func rememberFocusedContext() {
+  private func rememberFocusedContext(now: TimeInterval, force: Bool = false) {
+    guard force || now - lastFocusedContextCheckAt >= 0.25 else { return }
+    lastFocusedContextCheckAt = now
     guard let target = accessibility.focusedWindow(),
       target.metadata.processIdentifier != getpid(),
-      let display = DesktopGeometry.display(owning: target.metadata.frame)
+      let display = DesktopGeometry.display(owning: target.metadata.frame, in: activeDisplays)
     else { return }
     recentWindows[display.id] = target
     currentExternalDisplayID = display.id
   }
 
   private func rememberPointer(at point: CGPoint) {
-    guard let display = DesktopGeometry.display(containing: point) else { return }
+    guard let display = DesktopGeometry.display(containing: point, in: activeDisplays) else {
+      return
+    }
     recentPointerPositions[display.id] = DesktopGeometry.clamp(point, to: display.visibleBounds)
   }
 
   private func handlePhysicalPointerActivity(at point: CGPoint) {
     rememberPointer(at: point)
-    guard let displayID = DesktopGeometry.display(containing: point)?.id,
+    guard let displayID = DesktopGeometry.display(containing: point, in: activeDisplays)?.id,
       autoReturnPolicy.pointerActivity(on: displayID)
     else { return }
     autoReturnTask?.cancel()
@@ -384,7 +413,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     now: TimeInterval,
     scheduleAutoReturn: Bool = true
   ) -> Bool {
-    guard let display = DesktopGeometry.activeDisplays.first(where: { $0.id == displayID }) else {
+    guard enabled, !runtimeSuspended, accessibility.isTrusted,
+      let display = activeDisplays.first(where: { $0.id == displayID })
+    else {
       return false
     }
     let originDisplayID = currentExternalDisplayID
@@ -397,13 +428,16 @@ final class TelepathyController: NSObject, NSMenuDelegate {
         excludingProcessIdentifier: getpid()
       )
     }
-    let target = remembered ?? accessibility.frontmostEligibleTarget(
-      on: display,
-      excludingProcessIdentifier: getpid()
-    )
-    let pointer = recentPointerPositions[displayID].map {
-      DesktopGeometry.clamp($0, to: display.visibleBounds)
-    } ?? CGPoint(x: display.visibleBounds.midX, y: display.visibleBounds.midY)
+    let target =
+      remembered
+      ?? accessibility.frontmostEligibleTarget(
+        on: display,
+        excludingProcessIdentifier: getpid()
+      )
+    let pointer =
+      recentPointerPositions[displayID].map {
+        DesktopGeometry.clamp($0, to: display.visibleBounds)
+      } ?? CGPoint(x: display.visibleBounds.midX, y: display.visibleBounds.midY)
 
     if warpPointer { mouseMonitor.prepareForCursorWarp(now: now) }
     var succeeded = false
@@ -475,7 +509,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     else {
       return
     }
-    mapper.addSample(features: features, point: point, desktopBounds: DesktopGeometry.quartzBounds)
+    rememberFocusedContext(now: now, force: true)
+    guard camera.processingDetail == .detailed else { return }
+    mapper.addSample(features: features, point: point, desktopBounds: desktopBounds)
     refitDisplayClassifier()
     persistCalibration()
     refreshOverlay()
@@ -494,8 +530,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private func refitDisplayClassifier() {
     displayClassifier.fit(
       samples: mapper.samples,
-      desktopBounds: DesktopGeometry.quartzBounds,
-      displays: DesktopGeometry.activeDisplays
+      desktopBounds: desktopBounds,
+      displays: activeDisplays
     )
   }
 
@@ -519,12 +555,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     guard feedbackTask == nil else { return }
     guard screenFeedbackEnabled,
       let displayID = decision.targetDisplayID,
-      let display = DesktopGeometry.activeDisplays.first(where: { $0.id == displayID })
+      let display = activeDisplays.first(where: { $0.id == displayID })
     else {
-      if feedbackTask == nil {
-        feedbackDisplayFrame = nil
-        feedbackPhase = nil
-      }
+      setFeedback(displayFrame: nil, phase: nil)
       return
     }
 
@@ -534,8 +567,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       stabilityInterval: switchDelay,
       now: now
     )
-    feedbackDisplayFrame = phase == nil ? nil : display.bounds
+    setFeedback(displayFrame: phase == nil ? nil : display.bounds, phase: phase)
+  }
+
+  private func setFeedback(displayFrame: CGRect?, phase: DisplayFeedbackPhase?) {
+    guard feedbackDisplayFrame != displayFrame || feedbackPhase != phase else { return }
+    feedbackDisplayFrame = displayFrame
     feedbackPhase = phase
+    refreshOverlay()
   }
 
   private func showConfirmedFeedback(on display: ActiveDisplay) {
@@ -573,10 +612,12 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func clearFeedback() {
+    let hadVisibleFeedback = feedbackDisplayFrame != nil || feedbackPhase != nil
     feedbackTask?.cancel()
     feedbackTask = nil
     feedbackDisplayFrame = nil
     feedbackPhase = nil
+    if hadVisibleFeedback { refreshOverlay() }
   }
 
   private func configureControlPanel() {
@@ -654,6 +695,124 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
   }
 
+  private func configureRuntimeObservers() {
+    appActivationObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        if self.accessibility.isTrusted, !self.mouseMonitor.isRunning {
+          _ = self.mouseMonitor.start()
+        }
+        self.updateCameraRunningState()
+        self.refreshMenu()
+        self.refreshControlPanel()
+      }
+    }
+
+    let center = NSWorkspace.shared.notificationCenter
+    workspaceObservers.append(
+      center.addObserver(
+        forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.setScreenSleeping(true) }
+      }
+    )
+    workspaceObservers.append(
+      center.addObserver(
+        forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.setScreenSleeping(false) }
+      }
+    )
+    workspaceObservers.append(
+      center.addObserver(
+        forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.setSessionInactive(true) }
+      }
+    )
+    workspaceObservers.append(
+      center.addObserver(
+        forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor [weak self] in self?.setSessionInactive(false) }
+      }
+    )
+  }
+
+  private func removeRuntimeObservers() {
+    let center = NSWorkspace.shared.notificationCenter
+    workspaceObservers.forEach(center.removeObserver)
+    workspaceObservers.removeAll()
+    if let appActivationObserver {
+      NotificationCenter.default.removeObserver(appActivationObserver)
+      self.appActivationObserver = nil
+    }
+    if let displayObserver {
+      NotificationCenter.default.removeObserver(displayObserver)
+      self.displayObserver = nil
+    }
+  }
+
+  private func setScreenSleeping(_ sleeping: Bool) {
+    guard runtimeSuspension.screenSleeping != sleeping else { return }
+    let wasSuspended = runtimeSuspended
+    runtimeSuspension.screenSleeping = sleeping
+    invalidateInteractionIfSuspending(wasSuspended: wasSuspended)
+    refreshRuntimeState()
+  }
+
+  private func setSessionInactive(_ inactive: Bool) {
+    guard runtimeSuspension.sessionInactive != inactive else { return }
+    let wasSuspended = runtimeSuspended
+    runtimeSuspension.sessionInactive = inactive
+    invalidateInteractionIfSuspending(wasSuspended: wasSuspended)
+    refreshRuntimeState()
+  }
+
+  private func invalidateInteractionIfSuspending(wasSuspended: Bool) {
+    guard !wasSuspended, runtimeSuspended else { return }
+    switchPolicy.resetCandidate()
+    clearPendingConfirmation()
+    cancelAutoReturn()
+    clearFeedback()
+  }
+
+  private func refreshRuntimeState() {
+    updateCameraRunningState()
+    refreshOverlay()
+    refreshMenu()
+    refreshControlPanel()
+  }
+
+  private func updateCameraRunningState() {
+    camera.processingDetail = CameraRuntimePolicy.processingDetail(
+      isCalibrating: isCalibrating,
+      experimentalIndicatorEnabled: debugOverlayEnabled
+    )
+    let shouldRun = CameraRuntimePolicy.shouldRun(
+      enabled: enabled,
+      accessibilityTrusted: accessibility.isTrusted,
+      suspended: runtimeSuspended,
+      isCalibrating: isCalibrating,
+      experimentalIndicatorEnabled: debugOverlayEnabled,
+      displayCount: activeDisplays.count
+    )
+    guard wantsCameraRunning != shouldRun else { return }
+    wantsCameraRunning = shouldRun
+    if shouldRun {
+      camera.start()
+    } else {
+      camera.stop()
+      latestFeatures = nil
+      latestPrediction = nil
+      latestDisplayPrediction = nil
+    }
+  }
+
   private func configureStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     if let button = item.button {
@@ -704,7 +863,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     menu.addItem(enabledItem)
 
     let feedbackItem = NSMenuItem(
-      title: "Show screen bloom", action: #selector(toggleScreenFeedback), keyEquivalent: "")
+      title: "Show screen shine", action: #selector(toggleScreenFeedback), keyEquivalent: "")
     feedbackItem.target = self
     feedbackItem.state = screenFeedbackEnabled ? .on : .off
     menu.addItem(feedbackItem)
@@ -795,6 +954,47 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     let calibrationEnabled = cameraState == .running && !isCalibrating
     var state: ControlPanelState
     switch cameraState {
+    case .stopped where !enabled:
+      state = ControlPanelState(
+        enabled: false,
+        status: "Off",
+        detail: "Camera tracking is stopped. The emergency shortcut remains available.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: false,
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .stopped where runtimeSuspended:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Sleeping",
+        detail: "Camera tracking resumes when this Mac becomes active.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: false,
+        accessibilityReady: accessibility.isTrusted
+      )
+    case .stopped where !accessibility.isTrusted:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Accessibility access needed",
+        detail:
+          "Grant access once to the installed Telepathy app. Camera tracking stays off until then.",
+        gazeIndicatorEnabled: debugOverlayEnabled,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: false,
+        accessibilityReady: false
+      )
+    case .stopped where activeDisplays.count < 2 && !debugOverlayEnabled:
+      state = ControlPanelState(
+        enabled: enabled,
+        status: "Waiting for another display",
+        detail: "Camera tracking stays off while no display handoff is possible.",
+        gazeIndicatorEnabled: false,
+        calibrationButtonTitle: calibrationTitle,
+        calibrationEnabled: false,
+        accessibilityReady: accessibility.isTrusted
+      )
     case .stopped:
       state = ControlPanelState(
         enabled: enabled,
@@ -850,8 +1050,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       state = ControlPanelState(
         enabled: false,
         status: "Off",
-        detail:
-          "Camera estimation may continue locally, but focus and pointer movement are paused.",
+        detail: "Camera tracking is stopping; focus and pointer movement are paused.",
         gazeIndicatorEnabled: debugOverlayEnabled,
         calibrationButtonTitle: calibrationTitle,
         calibrationEnabled: calibrationEnabled,
@@ -872,8 +1071,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       state = ControlPanelState(
         enabled: enabled,
         status: "Calibration needed",
-        detail:
-          "Run Full Calibration for the current screens. Clicks will keep refining screen selection.",
+        detail: "Run Full Calibration for the current screens before using display handoff.",
         gazeIndicatorEnabled: debugOverlayEnabled,
         calibrationButtonTitle: calibrationTitle,
         calibrationEnabled: calibrationEnabled,
@@ -904,6 +1102,11 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private var statusText: String {
     switch cameraState {
+    case .stopped where !enabled: "Off"
+    case .stopped where runtimeSuspended: "Sleeping"
+    case .stopped where !accessibility.isTrusted: "Accessibility permission required"
+    case .stopped where activeDisplays.count < 2 && !debugOverlayEnabled:
+      "Waiting for another display"
     case .stopped: "Camera stopped"
     case .requestingPermission: "Waiting for Camera permission"
     case .denied: "Camera permission denied"
@@ -927,7 +1130,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     return AdaptiveGazeMapper.makeSample(
       features: features,
       point: point,
-      desktopBounds: DesktopGeometry.quartzBounds
+      desktopBounds: desktopBounds
     )
   }
 
@@ -951,6 +1154,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private func finishCalibration() {
     isCalibrating = false
+    updateCameraRunningState()
     latestPrediction = nil
     latestDisplayPrediction = nil
     switchPolicy.resetCandidate()
@@ -972,7 +1176,11 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   private func handleDisplayChange() {
+    let updatedDisplays = DesktopGeometry.activeDisplays
+    let updatedBounds = DesktopGeometry.quartzBounds
     let fingerprint = DesktopGeometry.layoutFingerprint
+    activeDisplays = updatedDisplays
+    desktopBounds = updatedBounds
     guard fingerprint != currentLayoutFingerprint else { return }
 
     if calibrationOverlay.isRunning {
@@ -988,6 +1196,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     switchPolicy.resetCandidate()
     cancelAutoReturn()
     clearFeedback()
+    updateCameraRunningState()
     refreshOverlay()
     refreshMenu()
     refreshControlPanel()
@@ -1048,6 +1257,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     guard alert.runModal() == .alertFirstButtonReturn else { return }
 
     isCalibrating = true
+    updateCameraRunningState()
     switchPolicy.resetCandidate()
     cancelAutoReturn()
     clearFeedback()

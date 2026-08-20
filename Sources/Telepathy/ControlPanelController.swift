@@ -207,7 +207,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
 
     screenFeedbackSwitch.target = self
     screenFeedbackSwitch.action = #selector(screenFeedbackChanged)
-    screenFeedbackSwitch.setAccessibilityLabel("Show screen bloom")
+    screenFeedbackSwitch.setAccessibilityLabel("Show screen shine")
 
     activationPopup.target = self
     activationPopup.action = #selector(activationChanged)
@@ -220,15 +220,19 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
 
     configurePopup(
       switchDelayPopup,
-      values: [("Instant", 0), ("90 ms", 0.09), ("150 ms", 0.15), ("250 ms", 0.25),
-        ("400 ms", 0.4), ("650 ms", 0.65)],
+      values: [
+        ("Instant", 0), ("90 ms", 0.09), ("150 ms", 0.15), ("250 ms", 0.25),
+        ("400 ms", 0.4), ("650 ms", 0.65),
+      ],
       action: #selector(switchDelayChanged),
       accessibilityLabel: "Switch delay"
     )
     configurePopup(
       autoReturnPopup,
-      values: [("Off", 0), ("1 second", 1), ("2 seconds", 2), ("3 seconds", 3),
-        ("5 seconds", 5)],
+      values: [
+        ("Off", 0), ("1 second", 1), ("2 seconds", 2), ("3 seconds", 3),
+        ("5 seconds", 5),
+      ],
       action: #selector(autoReturnChanged),
       accessibilityLabel: "Auto-return"
     )
@@ -280,7 +284,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       control: accentControls
     )
     let feedbackRow = makeToggleRow(
-      title: "Screen bloom",
+      title: "Screen shine",
       explanation: "Briefly show an armed, dwelling, or completed screen handoff.",
       control: screenFeedbackSwitch
     )
@@ -525,7 +529,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     guard let rawValue = activationPopup.selectedItem?.representedObject as? String,
       let mode = ActivationMode(rawValue: rawValue)
     else { return }
-    let shortcutName = currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
+    let shortcutName =
+      currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
     activationDetail.stringValue = mode.detail(shortcutName: shortcutName)
     onActivationModeChanged?(mode)
   }
@@ -578,7 +583,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       shortcutButton.title = binding.displayName
       onShortcutChanged?(binding)
     } else {
-      shortcutButton.title = currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
+      shortcutButton.title =
+        currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
     }
   }
 
@@ -593,9 +599,11 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 
   private func selectActivationMode(_ mode: ActivationMode) {
-    guard let index = activationPopup.itemArray.firstIndex(where: {
-      ($0.representedObject as? String) == mode.rawValue
-    }) else { return }
+    guard
+      let index = activationPopup.itemArray.firstIndex(where: {
+        ($0.representedObject as? String) == mode.rawValue
+      })
+    else { return }
     activationPopup.selectItem(at: index)
   }
 
@@ -615,17 +623,21 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 
   private func selectPopup(_ popup: NSPopUpButton, value: TimeInterval) {
-    guard let index = popup.itemArray.firstIndex(where: {
-      guard let number = $0.representedObject as? NSNumber else { return false }
-      return abs(number.doubleValue - value) < 0.001
-    }) else { return }
+    guard
+      let index = popup.itemArray.firstIndex(where: {
+        guard let number = $0.representedObject as? NSNumber else { return false }
+        return abs(number.doubleValue - value) < 0.001
+      })
+    else { return }
     popup.selectItem(at: index)
   }
 
   private func selectAccentSource(_ source: AccentThemeSource) {
-    guard let index = accentSourcePopup.itemArray.firstIndex(where: {
-      ($0.representedObject as? String) == source.rawValue
-    }) else { return }
+    guard
+      let index = accentSourcePopup.itemArray.firstIndex(where: {
+        ($0.representedObject as? String) == source.rawValue
+      })
+    else { return }
     accentSourcePopup.selectItem(at: index)
   }
 

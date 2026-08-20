@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import QuartzCore
 
 enum DisplayFeedbackPhase: Equatable {
   case candidate
@@ -10,26 +11,18 @@ enum DisplayFeedbackPhase: Equatable {
 
 @MainActor
 final class DebugOverlayController {
-  private struct Surface {
-    let panel: NSPanel
-    let view: DebugOverlayView
-  }
-
-  private var surfaces: [Surface] = []
+  private var surfaces: [DisplayShineSurface] = []
+  private var indicatorSurface: GazeIndicatorSurface?
   private var indicatorSmoother = GazeIndicatorSmoother()
   private var screenObserver: NSObjectProtocol?
-  private var snapshot = DebugOverlaySnapshot(
-    indicatorPoint: nil,
-    displayFrame: nil,
-    feedbackPhase: nil,
-    accentColor: OverlayStyle.accent
-  )
+  private var indicatorPoint: CGPoint?
+  private var feedbackDisplayFrame: CGRect?
+  private var feedbackPhase: DisplayFeedbackPhase?
 
   var accentColor = OverlayStyle.accent {
     didSet {
       guard !accentColor.isEqual(oldValue) else { return }
-      snapshot.accentColor = accentColor
-      applySnapshot()
+      renderCurrentState()
     }
   }
 
@@ -72,97 +65,114 @@ final class DebugOverlayController {
       indicatorPoint = nil
     }
 
-    snapshot = DebugOverlaySnapshot(
-      indicatorPoint: indicatorPoint,
-      displayFrame: displayFrame.map(DesktopGeometry.appKitRect(fromQuartz:)),
-      feedbackPhase: feedbackPhase,
-      accentColor: accentColor
-    )
-    applySnapshot()
+    self.indicatorPoint = indicatorPoint
+    feedbackDisplayFrame = displayFrame.map(DesktopGeometry.appKitRect(fromQuartz:))
+    self.feedbackPhase = feedbackPhase
+    renderCurrentState()
   }
 
   private func rebuildSurfaces() {
     indicatorSmoother.reset()
-    surfaces.forEach { $0.panel.orderOut(nil) }
-    surfaces = NSScreen.screens.map { screen in
-      let view = DebugOverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
-      let panel = NSPanel(
-        contentRect: screen.frame,
-        styleMask: [.borderless, .nonactivatingPanel],
-        backing: .buffered,
-        defer: false,
-        screen: screen
-      )
-      panel.setFrame(screen.frame, display: false)
-      panel.isOpaque = false
-      panel.backgroundColor = .clear
-      panel.hasShadow = false
-      panel.ignoresMouseEvents = true
-      panel.hidesOnDeactivate = false
-      panel.level = .statusBar
-      panel.collectionBehavior = [
-        .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
-      ]
-      panel.contentView = view
-      panel.setAccessibilityElement(false)
-      view.setAccessibilityElement(false)
-      return Surface(panel: panel, view: view)
-    }
-    applySnapshot()
+    indicatorPoint = nil
+    feedbackDisplayFrame = nil
+    feedbackPhase = nil
+    for surface in surfaces { surface.hide() }
+    indicatorSurface?.hide()
+    indicatorSurface = nil
+    surfaces = NSScreen.screens.map(DisplayShineSurface.init(screen:))
     updateVisibility()
   }
 
-  private func applySnapshot() {
-    for surface in surfaces {
-      surface.view.snapshot = snapshot
-      surface.view.needsDisplay = true
-    }
+  private func renderCurrentState() {
+    guard isVisible else { return }
+    renderShine()
+    renderIndicator()
   }
 
   private func updateVisibility() {
     if isVisible {
-      surfaces.forEach { $0.panel.orderFrontRegardless() }
+      renderCurrentState()
     } else {
-      surfaces.forEach { $0.panel.orderOut(nil) }
+      for surface in surfaces { surface.hide() }
+      indicatorSurface?.hide()
     }
+  }
+
+  private func renderShine() {
+    guard
+      let feedbackDisplayFrame,
+      let feedbackPhase,
+      let target = targetSurface(for: feedbackDisplayFrame)
+    else {
+      for surface in surfaces { surface.hide() }
+      return
+    }
+
+    let metrics = EdgeBloomMetrics.resolve(feedbackPhase)
+    for surface in surfaces {
+      if surface === target {
+        surface.show(metrics: metrics, accentColor: accentColor)
+      } else {
+        surface.hide()
+      }
+    }
+  }
+
+  private func renderIndicator() {
+    guard let indicatorPoint else {
+      indicatorSurface?.hide()
+      return
+    }
+
+    if indicatorSurface == nil {
+      let screen =
+        NSScreen.screens.first(where: { $0.frame.contains(indicatorPoint) })
+        ?? NSScreen.main
+        ?? NSScreen.screens.first
+      guard let screen else { return }
+      indicatorSurface = GazeIndicatorSurface(screen: screen)
+    }
+    indicatorSurface?.show(at: indicatorPoint, accentColor: accentColor)
+  }
+
+  private func targetSurface(for displayFrame: CGRect) -> DisplayShineSurface? {
+    let matches = surfaces.map { surface in
+      let intersection = surface.displayFrame.intersection(displayFrame)
+      let area = intersection.isNull ? 0 : intersection.width * intersection.height
+      return (surface, area)
+    }
+    guard let match = matches.max(by: { $0.1 < $1.1 }), match.1 > 1 else {
+      return nil
+    }
+    return match.0
   }
 }
 
-private struct DebugOverlaySnapshot {
-  var indicatorPoint: CGPoint?
-  var displayFrame: CGRect?
-  var feedbackPhase: DisplayFeedbackPhase?
-  var accentColor: NSColor
-}
-
 struct EdgeBloomMetrics: Equatable {
+  static let maximumDepth = 56.0
+
   let depth: Double
-  let edgeAlpha: Double
-  let middleAlpha: Double
-  let hairlineAlpha: Double
+  let opacity: Double
 
   static func resolve(_ phase: DisplayFeedbackPhase) -> EdgeBloomMetrics {
     switch phase {
     case .candidate:
-      return EdgeBloomMetrics(depth: 8, edgeAlpha: 0.12, middleAlpha: 0.04, hairlineAlpha: 0.18)
+      return EdgeBloomMetrics(depth: 24, opacity: 0.16)
     case .holding(let value):
       let progress = min(max(value, 0), 1)
+      let easedProgress = Self.easeOutCubic(progress)
       return EdgeBloomMetrics(
-        depth: 8 + 20 * progress,
-        edgeAlpha: 0.10 + 0.12 * progress,
-        middleAlpha: 0.035 + 0.045 * progress,
-        hairlineAlpha: 0.16 + 0.12 * progress
+        depth: 24 + 28 * easedProgress,
+        opacity: 0.15 + 0.13 * easedProgress
       )
     case .confirmed(let value):
       let progress = min(max(value, 0), 1)
-      let fadeIn = min(progress / 0.28, 1)
-      let fadeOut = max(1 - max(progress - 0.28, 0) / 0.72, 0)
+      let fadeIn = min(progress / 0.24, 1)
+      let fadeOut = max(1 - max(progress - 0.24, 0) / 0.76, 0)
       let intensity = fadeIn * fadeOut
       return EdgeBloomMetrics(
-        depth: 6 + 22 * Self.easeOutCubic(progress),
-        edgeAlpha: 0.24 * intensity,
-        middleAlpha: 0.085 * intensity,
-        hairlineAlpha: 0.32 * intensity
+        depth: 22 + 34 * Self.easeOutCubic(progress),
+        opacity: 0.34 * intensity
       )
     }
   }
@@ -172,128 +182,306 @@ struct EdgeBloomMetrics: Equatable {
   }
 }
 
-private final class DebugOverlayView: NSView {
-  var snapshot = DebugOverlaySnapshot(
-    indicatorPoint: nil,
-    displayFrame: nil,
-    feedbackPhase: nil,
-    accentColor: OverlayStyle.accent
+struct EdgeShineGradientSpec: Equatable {
+  let locations: [Double]
+  let relativeAlphas: [Double]
+
+  static let standard = EdgeShineGradientSpec(
+    locations: [0, 0.08, 0.26, 0.58, 1],
+    relativeAlphas: [0.72, 1, 0.58, 0.18, 0]
   )
+}
+
+struct EdgeStripFrames: Equatable {
+  let top: CGRect
+  let bottom: CGRect
+  let left: CGRect
+  let right: CGRect
+
+  static func resolve(
+    displayFrame: CGRect,
+    maximumDepth: CGFloat = EdgeBloomMetrics.maximumDepth
+  ) -> EdgeStripFrames {
+    let depth = min(maximumDepth, min(displayFrame.width, displayFrame.height) / 3)
+    let sideHeight = max(displayFrame.height - 2 * depth, 0)
+    return EdgeStripFrames(
+      top: CGRect(
+        x: displayFrame.minX,
+        y: displayFrame.maxY - depth,
+        width: displayFrame.width,
+        height: depth
+      ),
+      bottom: CGRect(
+        x: displayFrame.minX,
+        y: displayFrame.minY,
+        width: displayFrame.width,
+        height: depth
+      ),
+      left: CGRect(
+        x: displayFrame.minX,
+        y: displayFrame.minY + depth,
+        width: depth,
+        height: sideHeight
+      ),
+      right: CGRect(
+        x: displayFrame.maxX - depth,
+        y: displayFrame.minY + depth,
+        width: depth,
+        height: sideHeight
+      )
+    )
+  }
+}
+
+private enum ShineEdge {
+  case top
+  case bottom
+  case left
+  case right
+}
+
+@MainActor
+private final class DisplayShineSurface {
+  let displayFrame: CGRect
+  private let strips: [EdgeShineSurface]
+
+  init(screen: NSScreen) {
+    displayFrame = screen.frame
+    let frames = EdgeStripFrames.resolve(displayFrame: screen.frame)
+    strips = [
+      EdgeShineSurface(frame: frames.top, edge: .top, screen: screen),
+      EdgeShineSurface(frame: frames.bottom, edge: .bottom, screen: screen),
+      EdgeShineSurface(frame: frames.left, edge: .left, screen: screen),
+      EdgeShineSurface(frame: frames.right, edge: .right, screen: screen),
+    ]
+  }
+
+  func show(metrics: EdgeBloomMetrics, accentColor: NSColor) {
+    for strip in strips { strip.show(metrics: metrics, accentColor: accentColor) }
+  }
+
+  func hide() {
+    for strip in strips { strip.hide() }
+  }
+}
+
+@MainActor
+private final class EdgeShineSurface {
+  private let panel: NSPanel
+  private let view: EdgeShineView
+
+  init(frame: CGRect, edge: ShineEdge, screen: NSScreen) {
+    view = EdgeShineView(frame: CGRect(origin: .zero, size: frame.size), edge: edge)
+    panel = makeOverlayPanel(frame: frame, screen: screen, contentView: view)
+  }
+
+  func show(metrics: EdgeBloomMetrics, accentColor: NSColor) {
+    view.apply(metrics: metrics, accentColor: accentColor)
+    if metrics.opacity > 0 {
+      if !panel.isVisible { panel.orderFrontRegardless() }
+    } else if panel.isVisible {
+      panel.orderOut(nil)
+    }
+  }
+
+  func hide() {
+    if panel.isVisible { panel.orderOut(nil) }
+    view.suspendRendering()
+  }
+}
+
+private final class EdgeShineView: NSView {
+  private let edge: ShineEdge
+  private let shineLayer = CAGradientLayer()
+  private var gradientAccent: NSColor?
+  private var renderedMetrics: EdgeBloomMetrics?
+  private var shineIsHidden = true
 
   override var isFlipped: Bool { false }
   override var acceptsFirstResponder: Bool { false }
 
+  init(frame frameRect: NSRect, edge: ShineEdge) {
+    self.edge = edge
+    super.init(frame: frameRect)
+    configureLayer()
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  func apply(metrics: EdgeBloomMetrics, accentColor: NSColor) {
+    updateGradientColorsIfNeeded(accentColor)
+    guard shineIsHidden || renderedMetrics != metrics else { return }
+    renderedMetrics = metrics
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    layoutShineLayer(depth: CGFloat(metrics.depth))
+    shineLayer.opacity = Float(metrics.opacity)
+    shineLayer.isHidden = metrics.opacity <= 0
+    shineIsHidden = metrics.opacity <= 0
+    CATransaction.commit()
+  }
+
+  func suspendRendering() {
+    guard !shineIsHidden else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    shineLayer.isHidden = true
+    shineLayer.opacity = 0
+    shineIsHidden = true
+    CATransaction.commit()
+  }
+
+  override func layout() {
+    super.layout()
+    guard let renderedMetrics else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    layoutShineLayer(depth: CGFloat(renderedMetrics.depth))
+    CATransaction.commit()
+  }
+
+  private func configureLayer() {
+    wantsLayer = true
+    layer?.backgroundColor = NSColor.clear.cgColor
+
+    switch edge {
+    case .top:
+      shineLayer.startPoint = CGPoint(x: 0.5, y: 1)
+      shineLayer.endPoint = CGPoint(x: 0.5, y: 0)
+    case .bottom:
+      shineLayer.startPoint = CGPoint(x: 0.5, y: 0)
+      shineLayer.endPoint = CGPoint(x: 0.5, y: 1)
+    case .left:
+      shineLayer.startPoint = CGPoint(x: 0, y: 0.5)
+      shineLayer.endPoint = CGPoint(x: 1, y: 0.5)
+    case .right:
+      shineLayer.startPoint = CGPoint(x: 1, y: 0.5)
+      shineLayer.endPoint = CGPoint(x: 0, y: 0.5)
+    }
+
+    shineLayer.locations = EdgeShineGradientSpec.standard.locations.map { NSNumber(value: $0) }
+    shineLayer.isHidden = true
+    shineLayer.opacity = 0
+    layer?.addSublayer(shineLayer)
+  }
+
+  private func updateGradientColorsIfNeeded(_ accent: NSColor) {
+    guard gradientAccent?.isEqual(accent) != true else { return }
+    gradientAccent = accent
+
+    let base = accent.usingColorSpace(.deviceRGB) ?? accent
+    let highlight = base.blended(withFraction: 0.18, of: .white) ?? base
+    let softHighlight = base.blended(withFraction: 0.08, of: .white) ?? base
+    let tones = [highlight, softHighlight, base, base, base]
+    let colors = zip(tones, EdgeShineGradientSpec.standard.relativeAlphas).map { tone, alpha in
+      tone.withAlphaComponent(alpha).cgColor
+    }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    shineLayer.colors = colors
+    CATransaction.commit()
+  }
+
+  private func layoutShineLayer(depth requestedDepth: CGFloat) {
+    let maximumDepth: CGFloat
+    switch edge {
+    case .top, .bottom:
+      maximumDepth = bounds.height
+    case .left, .right:
+      maximumDepth = bounds.width
+    }
+    let depth = min(requestedDepth, maximumDepth)
+    switch edge {
+    case .top:
+      shineLayer.frame = CGRect(x: 0, y: bounds.maxY - depth, width: bounds.width, height: depth)
+    case .bottom:
+      shineLayer.frame = CGRect(x: 0, y: 0, width: bounds.width, height: depth)
+    case .left:
+      shineLayer.frame = CGRect(x: 0, y: 0, width: depth, height: bounds.height)
+    case .right:
+      shineLayer.frame = CGRect(x: bounds.maxX - depth, y: 0, width: depth, height: bounds.height)
+    }
+  }
+}
+
+@MainActor
+private final class GazeIndicatorSurface {
+  private static let diameter = ceil(
+    2 * (OverlayStyle.indicatorRadius + OverlayStyle.indicatorLineWidth + 2)
+  )
+
+  private let panel: NSPanel
+  private let view: GazeIndicatorView
+  private var renderedFrame: CGRect?
+
+  init(screen: NSScreen) {
+    let size = CGSize(width: Self.diameter, height: Self.diameter)
+    view = GazeIndicatorView(frame: CGRect(origin: .zero, size: size))
+    panel = makeOverlayPanel(
+      frame: CGRect(origin: screen.frame.origin, size: size),
+      screen: screen,
+      contentView: view
+    )
+  }
+
+  func show(at point: CGPoint, accentColor: NSColor) {
+    view.accentColor = accentColor
+    let frame = CGRect(
+      x: point.x - Self.diameter / 2,
+      y: point.y - Self.diameter / 2,
+      width: Self.diameter,
+      height: Self.diameter
+    )
+    if renderedFrame != frame {
+      panel.setFrame(frame, display: false)
+      renderedFrame = frame
+    }
+    if !panel.isVisible { panel.orderFrontRegardless() }
+  }
+
+  func hide() {
+    if panel.isVisible { panel.orderOut(nil) }
+  }
+}
+
+private final class GazeIndicatorView: NSView {
+  var accentColor = OverlayStyle.accent {
+    didSet {
+      guard !accentColor.isEqual(oldValue) else { return }
+      needsDisplay = true
+    }
+  }
+
+  override var isFlipped: Bool { false }
+  override var acceptsFirstResponder: Bool { false }
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    layer?.backgroundColor = NSColor.clear.cgColor
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
   override func draw(_ dirtyRect: NSRect) {
     super.draw(dirtyRect)
     guard let context = NSGraphicsContext.current?.cgContext else { return }
-
-    context.saveGState()
-    defer { context.restoreGState() }
-
-    if let displayFrame = snapshot.displayFrame, let phase = snapshot.feedbackPhase {
-      drawDisplayBloom(globalFrame: displayFrame, phase: phase, context: context)
-    }
-    if let indicatorPoint = snapshot.indicatorPoint {
-      drawGazeIndicator(globalPoint: indicatorPoint, context: context)
-    }
-  }
-
-  private func local(_ globalPoint: CGPoint) -> CGPoint {
-    CGPoint(x: globalPoint.x - windowFrame.minX, y: globalPoint.y - windowFrame.minY)
-  }
-
-  private func local(_ globalRect: CGRect) -> CGRect {
-    CGRect(
-      x: globalRect.minX - windowFrame.minX,
-      y: globalRect.minY - windowFrame.minY,
-      width: globalRect.width,
-      height: globalRect.height
-    )
-  }
-
-  private var windowFrame: CGRect {
-    window?.frame ?? DesktopGeometry.appKitBounds
-  }
-
-  private func drawDisplayBloom(
-    globalFrame: CGRect,
-    phase: DisplayFeedbackPhase,
-    context: CGContext
-  ) {
-    let frame = local(globalFrame).intersection(bounds)
-    guard !frame.isNull, frame.width > 1, frame.height > 1 else { return }
-
-    let metrics = EdgeBloomMetrics.resolve(phase)
-    let depth = CGFloat(min(metrics.depth, Double(min(frame.width, frame.height) / 3)))
-    let accent = snapshot.accentColor
-    guard
-      let gradient = CGGradient(
-        colorsSpace: CGColorSpaceCreateDeviceRGB(),
-        colors: [
-          accent.withAlphaComponent(metrics.edgeAlpha).cgColor,
-          accent.withAlphaComponent(metrics.middleAlpha).cgColor,
-          accent.withAlphaComponent(0).cgColor,
-        ] as CFArray,
-        locations: [0, 0.36, 1]
-      )
-    else { return }
-
-    drawEdgeGradient(
-      in: CGRect(x: frame.minX, y: frame.maxY - depth, width: frame.width, height: depth),
-      from: CGPoint(x: frame.midX, y: frame.maxY),
-      to: CGPoint(x: frame.midX, y: frame.maxY - depth),
-      gradient: gradient,
-      context: context
-    )
-    drawEdgeGradient(
-      in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: depth),
-      from: CGPoint(x: frame.midX, y: frame.minY),
-      to: CGPoint(x: frame.midX, y: frame.minY + depth),
-      gradient: gradient,
-      context: context
-    )
-    drawEdgeGradient(
-      in: CGRect(x: frame.minX, y: frame.minY, width: depth, height: frame.height),
-      from: CGPoint(x: frame.minX, y: frame.midY),
-      to: CGPoint(x: frame.minX + depth, y: frame.midY),
-      gradient: gradient,
-      context: context
-    )
-    drawEdgeGradient(
-      in: CGRect(x: frame.maxX - depth, y: frame.minY, width: depth, height: frame.height),
-      from: CGPoint(x: frame.maxX, y: frame.midY),
-      to: CGPoint(x: frame.maxX - depth, y: frame.midY),
-      gradient: gradient,
-      context: context
-    )
-
-    context.setStrokeColor(accent.withAlphaComponent(metrics.hairlineAlpha).cgColor)
-    context.setLineWidth(1)
-    context.stroke(frame.insetBy(dx: 0.5, dy: 0.5))
-  }
-
-  private func drawEdgeGradient(
-    in rect: CGRect,
-    from start: CGPoint,
-    to end: CGPoint,
-    gradient: CGGradient,
-    context: CGContext
-  ) {
-    context.saveGState()
-    context.clip(to: rect)
-    context.drawLinearGradient(gradient, start: start, end: end, options: [])
-    context.restoreGState()
-  }
-
-  private func drawGazeIndicator(globalPoint: CGPoint, context: CGContext) {
-    let point = local(globalPoint)
+    let point = CGPoint(x: bounds.midX, y: bounds.midY)
     let area = CGRect(
       x: point.x - OverlayStyle.indicatorRadius,
       y: point.y - OverlayStyle.indicatorRadius,
       width: OverlayStyle.indicatorRadius * 2,
       height: OverlayStyle.indicatorRadius * 2
     )
-    context.setStrokeColor(snapshot.accentColor.withAlphaComponent(0.58).cgColor)
+    context.setStrokeColor(accentColor.withAlphaComponent(0.58).cgColor)
     context.setLineWidth(OverlayStyle.indicatorLineWidth)
     context.strokeEllipse(in: area)
 
@@ -303,7 +491,32 @@ private final class DebugOverlayView: NSView {
       width: OverlayStyle.indicatorCenterRadius * 2,
       height: OverlayStyle.indicatorCenterRadius * 2
     )
-    context.setFillColor(snapshot.accentColor.cgColor)
+    context.setFillColor(accentColor.cgColor)
     context.fillEllipse(in: center)
   }
+}
+
+@MainActor
+private func makeOverlayPanel(frame: CGRect, screen: NSScreen, contentView: NSView) -> NSPanel {
+  let panel = NSPanel(
+    contentRect: frame,
+    styleMask: [.borderless, .nonactivatingPanel],
+    backing: .buffered,
+    defer: false,
+    screen: screen
+  )
+  panel.setFrame(frame, display: false)
+  panel.isOpaque = false
+  panel.backgroundColor = .clear
+  panel.hasShadow = false
+  panel.ignoresMouseEvents = true
+  panel.hidesOnDeactivate = false
+  panel.level = .statusBar
+  panel.collectionBehavior = [
+    .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle,
+  ]
+  contentView.autoresizingMask = [.width, .height]
+  panel.contentView = contentView
+  panel.setAccessibilityElement(false)
+  return panel
 }

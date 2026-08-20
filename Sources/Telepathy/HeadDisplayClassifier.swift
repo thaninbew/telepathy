@@ -16,9 +16,10 @@ final class HeadDisplayClassifier {
   private var means: [Double] = []
   private var scales: [Double] = []
   private var requiredDisplayIDs: Set<CGDirectDisplayID> = []
+  private var ready = false
 
   var isReady: Bool {
-    requiredDisplayIDs.count >= 2 && Set(points.map(\.displayID)) == requiredDisplayIDs
+    ready
   }
 
   func fit(
@@ -32,7 +33,7 @@ final class HeadDisplayClassifier {
       return
     }
 
-    points = samples.compactMap { sample in
+    let rawPoints: [TrainingPoint] = samples.compactMap { sample -> TrainingPoint? in
       let point = CGPoint(
         x: desktopBounds.minX + sample.normalizedX * desktopBounds.width,
         y: desktopBounds.minY + sample.normalizedY * desktopBounds.height
@@ -43,33 +44,54 @@ final class HeadDisplayClassifier {
       return TrainingPoint(displayID: display.id, vector: sample.features.headVector)
     }
 
-    guard !points.isEmpty else {
+    guard !rawPoints.isEmpty else {
       reset()
       return
     }
 
-    let dimension = points[0].vector.count
-    means = (0..<dimension).map { index in
-      points.map { $0.vector[index] }.reduce(0, +) / Double(points.count)
+    let dimension = rawPoints[0].vector.count
+    means = Array(repeating: 0, count: dimension)
+    for point in rawPoints {
+      for index in 0..<dimension {
+        means[index] += point.vector[index]
+      }
     }
-    scales = (0..<dimension).map { index in
-      let variance = points.map { value in
-        let delta = value.vector[index] - means[index]
-        return delta * delta
-      }.reduce(0, +) / Double(points.count)
-      return max(sqrt(variance), 0.025)
+    for index in 0..<dimension {
+      means[index] /= Double(rawPoints.count)
     }
+
+    var variances = Array(repeating: 0.0, count: dimension)
+    for point in rawPoints {
+      for index in 0..<dimension {
+        let delta = point.vector[index] - means[index]
+        variances[index] += delta * delta
+      }
+    }
+    scales = variances.map {
+      max(sqrt($0 / Double(rawPoints.count)), 0.025)
+    }
+    points = rawPoints.map {
+      TrainingPoint(displayID: $0.displayID, vector: standardized($0.vector))
+    }
+    ready = requiredDisplayIDs.count >= 2 && Set(points.map(\.displayID)) == requiredDisplayIDs
   }
 
   func predict(features: GazeFeatures) -> DisplayPrediction? {
     guard isReady, means.count == features.headVector.count else { return nil }
     let query = standardized(features.headVector)
-    let neighbors = points
-      .map { point in
-        (point.displayID, squaredDistance(query, standardized(point.vector)))
+    let neighborCount = min(5, points.count)
+    var neighbors: [(displayID: CGDirectDisplayID, distance: Double)] = []
+    neighbors.reserveCapacity(neighborCount)
+    for point in points {
+      let candidate = (point.displayID, squaredDistance(query, point.vector))
+      if neighbors.count < neighborCount {
+        neighbors.append(candidate)
+      } else if let worstIndex = neighbors.indices.max(by: {
+        neighbors[$0].distance < neighbors[$1].distance
+      }), candidate.1 < neighbors[worstIndex].distance {
+        neighbors[worstIndex] = candidate
       }
-      .sorted { $0.1 < $1.1 }
-      .prefix(min(5, points.count))
+    }
 
     var votes: [CGDirectDisplayID: Double] = [:]
     for (displayID, distance) in neighbors {
@@ -88,6 +110,7 @@ final class HeadDisplayClassifier {
     means = []
     scales = []
     requiredDisplayIDs = []
+    ready = false
   }
 
   private func standardized(_ vector: [Double]) -> [Double] {

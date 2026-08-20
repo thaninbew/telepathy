@@ -59,7 +59,7 @@ and the post-transfer cooldown remain authoritative. Settling is deliberately
 invisible so classifier indecision never becomes desktop flicker.
 
 - **Automatic:** commit after the configured Switch delay.
-- **Dwell (650 ms):** keep facing the candidate display for 650 ms. The screen bloom grows
+- **Dwell (650 ms):** keep facing the candidate display for 650 ms. The screen shine grows
   with progress, then the handoff commits without a second gesture.
 - **Keyboard:** arm the target, then press or hold the recorded key. Left Shift
   is the default and keeps its ordinary macOS meaning.
@@ -148,11 +148,12 @@ Profiles are keyed by display identity, geometry, resolution, rotation, and
 main-display assignment. A changed layout selects its matching saved profile or
 requires Full Calibration. It never silently reuses incompatible geometry.
 
-Ordinary non-confirmation clicks add local labels. For the main classifier, a
-click's display is a strong coarse label even when its exact point is imperfect.
-Future adaptation should be recency-weighted, reject outliers, detect posture
-clusters, and ask for Quick Recenter when confidence drifts rather than pooling
-every historical posture into one model.
+Clicks add local labels only while detailed Experimental tracking is active.
+Normal head-only clicks are not inserted into the eye model because synthetic
+pupil values would gradually contaminate precise calibration. Future coarse
+adaptation should use a separate persisted head-only store, weight recent
+evidence, reject outliers, detect posture clusters, and ask for Quick Recenter
+when confidence drifts.
 
 Camera frames are never stored or transmitted. Only compact calibration
 features and labels are persisted locally.
@@ -161,20 +162,22 @@ features and labels are persisted locally.
 
 Visual direction is instrument / monochrome: warm ink surfaces and one sparse
 accent signal. The accent can follow macOS or use one custom color across the
-control window, bloom, gaze indicator, and calibration. The desktop remains the
+control window, shine, gaze indicator, and calibration. The desktop remains the
 dominant surface.
 
-Each display owns a click-through transparent AppKit panel so feedback works
-across real display geometry and Spaces. A temporary proximity bloom is drawn
-just inside the candidate screen perimeter:
+Each display owns four narrow, click-through AppKit edge strips so feedback
+works across real display geometry and Spaces without retaining a full-screen
+transparent backing surface. A temporary Core Animation shine appears just
+inside the candidate screen perimeter:
 
 - **Candidate:** a thin, brief edge light says the stable glance was recognized and the
   target is armed.
 - **Dwell:** the same edge light creeps farther inward with dwell progress.
 - **Confirmed:** a soft edge light creeps inward and disappears in about 720 ms.
 
-The bloom is four clipped edge gradients plus a one-pixel hairline. It has no
-center-origin stroke, shadow, persistent rectangle, or settling-state render.
+The shine uses persistent five-stop `CAGradientLayer` content with no perimeter
+stroke, blur, shadow, material, persistent rectangle, or settling-state render.
+Only the selected display's strips enter the WindowServer composition tree.
 The cue appears only after 180 ms of target stability; the armed cue expires
 after 420 ms. Screen feedback can be disabled without turning Telepathy off.
 The separately smoothed gaze-area ring is off by default and explicitly labeled
@@ -188,7 +191,7 @@ the native control window and menu-bar menu.
 ```text
 AVFoundation camera
         |
-Apple Vision face landmarks
+Apple Vision face rectangles (normal) / landmarks (detailed)
         |
         +--> head features --> per-layout display classifier
         |                              |
@@ -202,6 +205,14 @@ Apple Vision face landmarks
 
 physical clicks --> local labels for both models
 ```
+
+Normal mode runs head-only face rectangles at 15 fps. Full landmarks and 20 fps
+are reserved for calibration and the Experimental indicator. Focused-window
+Accessibility sampling is limited to 4 Hz, display geometry is cached until a
+screen-change notification, and static UI is never rebuilt from each camera
+frame. Camera capture stops while Telepathy is Off, the session is locked or
+asleep, Accessibility is unavailable, or fewer than two displays make a normal
+handoff impossible.
 
 Apple Head Pointer is not embedded because it owns pointer movement and does
 not expose the tracking signal required for this interaction. Telepathy uses
