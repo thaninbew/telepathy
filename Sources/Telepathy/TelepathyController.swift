@@ -11,6 +11,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     static let screenFeedback = "telepathy.screenFeedback"
     static let warpPointer = "telepathy.warpPointer"
     static let activationMode = "telepathy.activationMode"
+    static let explicitActivationOverridesMouseMovement =
+      "telepathy.explicitActivationOverridesMouseMovement"
     static let shortcutKeyCode = "telepathy.shortcutKeyCode"
     static let shortcutDisplayName = "telepathy.shortcutDisplayName"
     static let switchDelay = "telepathy.switchDelay"
@@ -120,6 +122,20 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
   }
 
+  private var explicitActivationOverridesMouseMovement: Bool {
+    didSet {
+      UserDefaults.standard.set(
+        explicitActivationOverridesMouseMovement,
+        forKey: DefaultsKey.explicitActivationOverridesMouseMovement
+      )
+      switchPolicy.resetCandidate()
+      clearPendingConfirmation()
+      clearFeedback()
+      refreshMenu()
+      refreshControlPanel()
+    }
+  }
+
   private var shortcut: ShortcutBinding {
     didSet {
       UserDefaults.standard.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
@@ -177,6 +193,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     activationMode =
       ActivationMode(
         rawValue: defaults.string(forKey: DefaultsKey.activationMode) ?? "") ?? .automatic
+    explicitActivationOverridesMouseMovement =
+      defaults.object(forKey: DefaultsKey.explicitActivationOverridesMouseMovement) as? Bool
+      ?? true
     var migratedLegacyShortcut = false
     if let keyCode = defaults.object(forKey: DefaultsKey.shortcutKeyCode) as? NSNumber,
       let displayName = defaults.string(forKey: DefaultsKey.shortcutDisplayName),
@@ -346,7 +365,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       mode: activationMode,
       now: now,
       lastPhysicalMouseActivity: mouseMonitor.lastPhysicalMouseActivity,
-      signal: signal
+      signal: signal,
+      explicitActivationOverridesMouseMovement: explicitActivationOverridesMouseMovement
     )
     updateFeedback(for: decision, now: now)
     guard decision.phase == .commit, let displayID = decision.targetDisplayID else { return }
@@ -637,6 +657,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       guard let self, self.activationMode != mode else { return }
       self.activationMode = mode
     }
+    controlPanel.onExplicitActivationMouseOverrideChanged = { [weak self] isEnabled in
+      guard let self, self.explicitActivationOverridesMouseMovement != isEnabled else { return }
+      self.explicitActivationOverridesMouseMovement = isEnabled
+    }
     controlPanel.onShortcutChanged = { [weak self] shortcut in
       guard let self, self.shortcut != shortcut else { return }
       self.shortcut = shortcut
@@ -905,6 +929,15 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     warpItem.state = warpPointer ? .on : .off
     menu.addItem(warpItem)
 
+    let mouseOverrideItem = NSMenuItem(
+      title: "Allow explicit activation while moving mouse",
+      action: #selector(toggleExplicitActivationMouseOverride),
+      keyEquivalent: ""
+    )
+    mouseOverrideItem.target = self
+    mouseOverrideItem.state = explicitActivationOverridesMouseMovement ? .on : .off
+    menu.addItem(mouseOverrideItem)
+
     menu.addItem(.separator())
 
     let calibrationItem = NSMenuItem(
@@ -1091,6 +1124,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
     state.screenFeedbackEnabled = screenFeedbackEnabled
     state.activationMode = activationMode
+    state.explicitActivationOverridesMouseMovement = explicitActivationOverridesMouseMovement
     state.shortcut = shortcut
     state.switchDelay = switchDelay
     state.autoReturnInterval = autoReturnInterval
@@ -1219,6 +1253,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   @objc private func toggleWarpPointer() {
     warpPointer.toggle()
+  }
+
+  @objc private func toggleExplicitActivationMouseOverride() {
+    explicitActivationOverridesMouseMovement.toggle()
   }
 
   @objc private func selectActivationMode(_ sender: NSMenuItem) {

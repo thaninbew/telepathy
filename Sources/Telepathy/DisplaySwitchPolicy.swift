@@ -36,7 +36,8 @@ struct DisplaySwitchPolicy {
     mode: ActivationMode,
     now: TimeInterval,
     lastPhysicalMouseActivity: TimeInterval,
-    signal: ConfirmationSignal = .none
+    signal: ConfirmationSignal = .none,
+    explicitActivationOverridesMouseMovement: Bool = true
   ) -> DisplaySwitchDecision {
     guard let targetDisplayID, targetDisplayID != currentDisplayID else {
       resetCandidate()
@@ -47,7 +48,8 @@ struct DisplaySwitchPolicy {
       candidateDisplayID = targetDisplayID
       candidateSince = now
       if stabilityInterval > 0 {
-        return DisplaySwitchDecision(targetDisplayID: targetDisplayID, phase: .settling(progress: 0))
+        return DisplaySwitchDecision(
+          targetDisplayID: targetDisplayID, phase: .settling(progress: 0))
       }
     }
 
@@ -67,7 +69,8 @@ struct DisplaySwitchPolicy {
     let signalMatches = Self.signal(signal, matches: mode)
     let mouseIsQuiet = now - lastPhysicalMouseActivity >= mouseQuietInterval
     let cooldownExpired = now - lastSwitchAt >= switchCooldown
-    let authorityAllowsCommit = (mouseIsQuiet || signalMatches && mode == .mouse) && cooldownExpired
+    let explicitOverride = signalMatches && explicitActivationOverridesMouseMovement
+    let authorityAllowsCommit = (mouseIsQuiet || explicitOverride) && cooldownExpired
 
     let wantsCommit: Bool
     let waitingPhase: DisplaySwitchDecision.Phase

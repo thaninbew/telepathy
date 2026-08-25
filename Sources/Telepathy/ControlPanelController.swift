@@ -10,6 +10,7 @@ struct ControlPanelState: Equatable {
   let accessibilityReady: Bool
   var screenFeedbackEnabled: Bool = true
   var activationMode: ActivationMode = .automatic
+  var explicitActivationOverridesMouseMovement = true
   var shortcut: ShortcutBinding = .defaultValue
   var switchDelay: TimeInterval = 0.09
   var autoReturnInterval: TimeInterval = 0
@@ -24,6 +25,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   var onGazeIndicatorChanged: ((Bool) -> Void)?
   var onScreenFeedbackChanged: ((Bool) -> Void)?
   var onActivationModeChanged: ((ActivationMode) -> Void)?
+  var onExplicitActivationMouseOverrideChanged: ((Bool) -> Void)?
   var onShortcutChanged: ((ShortcutBinding) -> Void)?
   var onSwitchDelayChanged: ((TimeInterval) -> Void)?
   var onAutoReturnChanged: ((TimeInterval) -> Void)?
@@ -36,6 +38,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private let powerSwitch = AccentSwitch()
   private let gazeIndicatorSwitch = AccentSwitch()
   private let screenFeedbackSwitch = AccentSwitch()
+  private let explicitActivationMouseOverrideSwitch = AccentSwitch()
   private let activationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let activationDetail = NSTextField(wrappingLabelWithString: "")
   private let shortcutButton = NSButton(title: "Left Shift", target: nil, action: nil)
@@ -104,6 +107,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     powerSwitch.state = state.enabled ? .on : .off
     gazeIndicatorSwitch.state = state.gazeIndicatorEnabled ? .on : .off
     screenFeedbackSwitch.state = state.screenFeedbackEnabled ? .on : .off
+    explicitActivationMouseOverrideSwitch.state =
+      state.explicitActivationOverridesMouseMovement ? .on : .off
     rebuildActivationMenu(shortcutName: state.shortcut.displayName)
     selectActivationMode(state.activationMode)
     activationDetail.stringValue = state.activationMode.detail(
@@ -209,6 +214,12 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     screenFeedbackSwitch.action = #selector(screenFeedbackChanged)
     screenFeedbackSwitch.setAccessibilityLabel("Show screen shine")
 
+    explicitActivationMouseOverrideSwitch.target = self
+    explicitActivationMouseOverrideSwitch.action = #selector(explicitActivationMouseOverrideChanged)
+    explicitActivationMouseOverrideSwitch.setAccessibilityLabel(
+      "Allow explicit activation while moving the mouse"
+    )
+
     activationPopup.target = self
     activationPopup.action = #selector(activationChanged)
     activationPopup.setAccessibilityLabel("Activation method")
@@ -269,6 +280,11 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       explanation: "How long the target screen must remain stable before activation.",
       control: switchDelayPopup
     )
+    let mouseOverrideRow = makeToggleRow(
+      title: "Mouse movement",
+      explanation: "Let Left Shift or middle mouse activate while the pointer is moving.",
+      control: explicitActivationMouseOverrideSwitch
+    )
     let autoReturnRow = makeSettingRow(
       title: "Auto-return",
       explanation: "Return to the previous screen unless physical mouse input adopts this one.",
@@ -293,15 +309,15 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       explanation: "Show the fine eye-and-head estimate used by the research mode.",
       control: gazeIndicatorSwitch
     )
-    let dividers = (0..<7).map { _ -> NSBox in
+    let dividers = (0..<8).map { _ -> NSBox in
       let divider = NSBox()
       divider.boxType = .separator
       return divider
     }
     let rows: [NSView] = [
       focusRow, dividers[0], activationRow, dividers[1], shortcutRow, dividers[2], delayRow,
-      dividers[3], autoReturnRow, dividers[4], accentRow, dividers[5], feedbackRow, dividers[6],
-      indicatorRow,
+      dividers[3], mouseOverrideRow, dividers[4], autoReturnRow, dividers[5], accentRow,
+      dividers[6], feedbackRow, dividers[7], indicatorRow,
     ]
     let stack = NSStackView(
       views: rows
@@ -525,6 +541,10 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     onScreenFeedbackChanged?(screenFeedbackSwitch.state == .on)
   }
 
+  @objc private func explicitActivationMouseOverrideChanged() {
+    onExplicitActivationMouseOverrideChanged?(explicitActivationMouseOverrideSwitch.state == .on)
+  }
+
   @objc private func activationChanged() {
     guard let rawValue = activationPopup.selectedItem?.representedObject as? String,
       let mode = ActivationMode(rawValue: rawValue)
@@ -644,6 +664,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private func applyAccent(_ accent: NSColor) {
     headerImage.contentTintColor = accent
     powerSwitch.accentColor = accent
+    explicitActivationMouseOverrideSwitch.accentColor = accent
     screenFeedbackSwitch.accentColor = accent
     gazeIndicatorSwitch.accentColor = accent
     permissionButton.contentTintColor = accent

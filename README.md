@@ -12,6 +12,7 @@ continue through macOS unchanged. Camera processing stays on the Mac.
 - Last eligible window and last physical pointer position remembered per display.
 - Automatic, dwell, configurable-keyboard, and middle-mouse activation.
 - Left Shift default shortcut, configurable Switch delay, and optional Auto-return.
+- Explicit activation during physical mouse movement, enabled by default and configurable.
 - A stable-only edge shine for armed, dwell-progress, and confirmed states.
 - A macOS or custom accent shared by the app, shine, indicator, and calibration.
 - Independent controls for the shine, pointer transfer, and Experimental gaze ring.
@@ -46,6 +47,11 @@ display in view for 650 ms; it needs no key or click. Keyboard activation
 defaults to **Left Shift**. A quick press or a held Left Shift confirms the stable
 target without blocking Shift's normal macOS behavior. Telepathy can record a
 different modifier or ordinary key, and shows it in parentheses beside Keyboard.
+
+By default, explicit Left Shift or middle-mouse activation overrides the 280 ms
+physical-mouse quiet period. Disable **Mouse movement** in Telepathy if all
+handoffs should wait until the pointer is still. Automatic and Dwell always
+preserve the quiet period.
 
 Switch delay controls how long a target must remain stable. Auto-return can
 restore the previous display after one to five seconds; physical mouse movement

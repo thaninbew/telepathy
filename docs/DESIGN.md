@@ -83,6 +83,8 @@ want more intent or for environments where reference glances are common.
 - The persistent power switch and `Command-Option-Escape` emergency shortcut
   stop all focus and pointer transfer.
 - Physical pointer movement suspends automatic transfer for 280 ms.
+- Explicit Keyboard or Mouse activation may override that quiet period when the
+  **Mouse movement** preference is enabled. Automatic and Dwell never override it.
 - A target must remain stable and the 240 ms switch cooldown must expire.
 - Low-confidence or uncalibrated classification does nothing.
 - Cursor warping occurs once per display handoff, never continuously.

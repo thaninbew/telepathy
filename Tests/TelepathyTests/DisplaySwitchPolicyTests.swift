@@ -126,4 +126,67 @@ final class DisplaySwitchPolicyTests: XCTestCase {
       .commit
     )
   }
+
+  func testKeyboardConfirmationCanOverrideActiveMouseMovement() {
+    var policy = DisplaySwitchPolicy(
+      stabilityInterval: 0.05,
+      holdInterval: 0.5,
+      mouseQuietInterval: 0.28,
+      switchCooldown: 0
+    )
+    _ = policy.evaluate(
+      targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+      now: 1, lastPhysicalMouseActivity: 1
+    )
+    XCTAssertEqual(
+      policy.evaluate(
+        targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+        now: 1.1, lastPhysicalMouseActivity: 1.1, signal: .keyboard,
+        explicitActivationOverridesMouseMovement: true
+      ).phase,
+      .commit
+    )
+  }
+
+  func testKeyboardConfirmationStillWaitsWhenMouseOverrideIsDisabled() {
+    var policy = DisplaySwitchPolicy(
+      stabilityInterval: 0.05,
+      holdInterval: 0.5,
+      mouseQuietInterval: 0.28,
+      switchCooldown: 0
+    )
+    _ = policy.evaluate(
+      targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+      now: 1, lastPhysicalMouseActivity: 1
+    )
+    XCTAssertEqual(
+      policy.evaluate(
+        targetDisplayID: 2, currentDisplayID: 1, mode: .keyboard,
+        now: 1.1, lastPhysicalMouseActivity: 1.1, signal: .keyboard,
+        explicitActivationOverridesMouseMovement: false
+      ).phase,
+      .armed
+    )
+  }
+
+  func testAutomaticModeStillRespectsMouseMovementWhenOverrideIsEnabled() {
+    var policy = DisplaySwitchPolicy(
+      stabilityInterval: 0.05,
+      holdInterval: 0.5,
+      mouseQuietInterval: 0.28,
+      switchCooldown: 0
+    )
+    _ = policy.evaluate(
+      targetDisplayID: 2, currentDisplayID: 1, mode: .automatic,
+      now: 1, lastPhysicalMouseActivity: 1
+    )
+    XCTAssertEqual(
+      policy.evaluate(
+        targetDisplayID: 2, currentDisplayID: 1, mode: .automatic,
+        now: 1.1, lastPhysicalMouseActivity: 1.1,
+        explicitActivationOverridesMouseMovement: true
+      ).phase,
+      .armed
+    )
+  }
 }
