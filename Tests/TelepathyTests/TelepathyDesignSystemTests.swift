@@ -25,4 +25,12 @@ final class TelepathyDesignSystemTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(adjusted.contrastRatio(against: background), 3)
     }
   }
+
+  func testStatusItemUsesThePeripheralMarkAsATemplateImage() {
+    let image = TelepathyLogoView.statusItemImage()
+
+    XCTAssertEqual(image.size, NSSize(width: 18, height: 18))
+    XCTAssertTrue(image.isTemplate)
+    XCTAssertEqual(image.accessibilityDescription, "Telepathy")
+  }
 }
