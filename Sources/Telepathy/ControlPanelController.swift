@@ -74,7 +74,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private let statusDot = StatusDotView()
   private let sidebarStatusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
-  private let sidebarStatusLabel = NSTextField(labelWithString: "Starting")
+  private let sidebarStatusLabel = NSTextField(wrappingLabelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
   private let permissionButton = NSButton(
     title: "Open Accessibility Settings",
@@ -242,7 +242,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     configureStatusDot(sidebarStatusDot)
     sidebarStatusLabel.font = TelepathyComponent.sidebarDetailFont
     sidebarStatusLabel.textColor = TelepathySemantic.secondaryText
-    sidebarStatusLabel.lineBreakMode = .byTruncatingTail
+    sidebarStatusLabel.maximumNumberOfLines = 2
+    sidebarStatusLabel.lineBreakMode = .byWordWrapping
     let status = NSStackView(views: [sidebarStatusDot, sidebarStatusLabel])
     status.orientation = .horizontal
     status.alignment = .centerY
@@ -786,9 +787,10 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 
   private func updateActivationDependentControls(for mode: ActivationMode) {
-    let supportsExplicitOverride = mode != .automatic
+    let supportsExplicitOverride = mode == .keyboard || mode == .mouse
     explicitActivationMouseOverrideSwitch.isEnabled = supportsExplicitOverride
-    explicitActivationMouseOverrideSwitch.toolTip = supportsExplicitOverride
+    explicitActivationMouseOverrideSwitch.toolTip =
+      supportsExplicitOverride
       ? nil
       : "Choose Keyboard or Middle Mouse activation to use this setting."
   }
