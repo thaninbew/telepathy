@@ -24,7 +24,10 @@ final class ControlPanelPreviewAppDelegate: NSObject, NSApplicationDelegate {
       accessibilityReady: true
     )
     state.screenFeedbackEnabled = true
-    state.activationMode = .automatic
+    state.activationMode =
+      ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_ACTIVATION"]
+      .flatMap(ActivationMode.init(rawValue:)) ?? .automatic
+    state.explicitActivationOverridesMouseMovement = true
     state.shortcut = .defaultValue
     state.switchDelay = 0.09
     state.autoReturnInterval = 0
