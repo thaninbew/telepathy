@@ -39,16 +39,27 @@ final class TelepathyLogoView: NSView {
       width: markSize.width,
       height: markSize.height
     )
-    drawPeripheralMark(in: markRect)
+    Self.drawPeripheralMark(in: markRect, color: accentColor)
   }
 
-  private func drawPeripheralMark(in rect: NSRect) {
+  static func statusItemImage() -> NSImage {
+    let size = NSSize(width: 18, height: 18)
+    let image = NSImage(size: size, flipped: false) { rect in
+      drawPeripheralMark(in: rect, color: .labelColor)
+      return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = "Telepathy"
+    return image
+  }
+
+  private static func drawPeripheralMark(in rect: NSRect, color: NSColor) {
     let scale = rect.width / 64
     let point: (CGFloat, CGFloat) -> NSPoint = { x, y in
       NSPoint(x: rect.minX + x * scale, y: rect.maxY - y * scale)
     }
 
-    accentColor.setStroke()
+    color.setStroke()
     let brackets = NSBezierPath()
     brackets.lineWidth = 5 * scale
     brackets.lineCapStyle = .round
@@ -90,7 +101,7 @@ final class TelepathyLogoView: NSView {
     eye.close()
     eye.stroke()
 
-    accentColor.setFill()
+    color.setFill()
     let pupilRadius = 6 * scale
     let pupilCenter = point(40, 32)
     let pupil = NSRect(

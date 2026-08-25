@@ -840,7 +840,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private func configureStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     if let button = item.button {
-      button.image = NSImage(systemSymbolName: "eye.circle", accessibilityDescription: "Telepathy")
+      button.image = TelepathyLogoView.statusItemImage()
+      button.imagePosition = .imageOnly
+      button.imageScaling = .scaleProportionallyDown
+      button.contentTintColor = .labelColor
       button.toolTip = "Telepathy"
     }
     let menu = NSMenu(title: "Telepathy")
@@ -859,10 +862,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     menu.removeAllItems()
 
     if let button = statusItem?.button {
-      button.image = NSImage(
-        systemSymbolName: enabled ? "eye.circle.fill" : "eye.slash.circle",
-        accessibilityDescription: enabled ? "Telepathy on" : "Telepathy off"
-      )
+      button.image = TelepathyLogoView.statusItemImage()
+      button.image?.accessibilityDescription = enabled ? "Telepathy on" : "Telepathy off"
+      button.contentTintColor = enabled ? .labelColor : .secondaryLabelColor
       button.toolTip = enabled ? "Telepathy is on" : "Telepathy is off"
     }
 

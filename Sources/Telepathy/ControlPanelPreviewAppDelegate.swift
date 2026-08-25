@@ -6,10 +6,13 @@ final class ControlPanelPreviewAppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApplication.shared.setActivationPolicy(.regular)
-    if ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_APPEARANCE"] == "light" {
+    switch ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_APPEARANCE"] {
+    case "light":
       panel.window?.appearance = NSAppearance(named: .aqua)
-    } else {
+    case "dark":
       panel.window?.appearance = NSAppearance(named: .darkAqua)
+    default:
+      break
     }
     var state = ControlPanelState(
       enabled: true,
