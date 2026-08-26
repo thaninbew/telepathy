@@ -36,6 +36,15 @@ final class AccentThemeTests: XCTestCase {
     XCTAssertEqual(resolved, bright)
   }
 
+  func testLightCustomColorIsDarkenedToMeetContrastFloor() {
+    let surface = AccentColor(red: 1, green: 1, blue: 1)
+    let light = AccentColor(red: 0.95, green: 0.86, blue: 0.54)
+    let resolved = light.adjustedForContrast(against: surface, minimumRatio: 3)
+
+    XCTAssertGreaterThanOrEqual(resolved.contrastRatio(against: surface), 3)
+    XCTAssertNotEqual(resolved, light)
+  }
+
   func testThemeRoundTripsThroughPersistenceFormat() throws {
     let theme = AccentTheme(
       source: .custom,

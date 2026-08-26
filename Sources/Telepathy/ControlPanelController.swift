@@ -21,6 +21,28 @@ struct ControlPanelState: Equatable {
 
 @MainActor
 final class ControlPanelController: NSWindowController, NSWindowDelegate {
+  private enum Page: Int, CaseIterable {
+    case focus
+    case calibration
+    case feedback
+
+    var title: String {
+      switch self {
+      case .focus: "Focus"
+      case .calibration: "Calibration"
+      case .feedback: "Feedback"
+      }
+    }
+
+    var symbolName: String {
+      switch self {
+      case .focus: "eye"
+      case .calibration: "scope"
+      case .feedback: "sparkles"
+      }
+    }
+  }
+
   var onEnabledChanged: ((Bool) -> Void)?
   var onGazeIndicatorChanged: ((Bool) -> Void)?
   var onScreenFeedbackChanged: ((Bool) -> Void)?
@@ -46,9 +68,13 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private let autoReturnPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let accentSourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let accentColorWell = NSColorWell()
-  private let headerImage = NSImageView()
+  private let logoView = TelepathyLogoView()
+  private let sourceList = NSTableView()
+  private let tabView = NSTabView()
   private let statusDot = StatusDotView()
+  private let sidebarStatusDot = StatusDotView()
   private let statusLabel = NSTextField(labelWithString: "Starting")
+  private let sidebarStatusLabel = NSTextField(wrappingLabelWithString: "Starting")
   private let detailLabel = NSTextField(wrappingLabelWithString: "Preparing camera tracking.")
   private let permissionButton = NSButton(
     title: "Open Accessibility Settings",
@@ -62,17 +88,15 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
 
   init() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 468, height: 780),
+      contentRect: NSRect(origin: .zero, size: TelepathyComponent.windowSize),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
     )
     window.title = "Telepathy"
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
     window.isReleasedWhenClosed = false
-    window.backgroundColor = OverlayStyle.background
-    window.appearance = NSAppearance(named: .darkAqua)
+    window.backgroundColor = TelepathySemantic.background
+    window.minSize = TelepathyComponent.minimumWindowSize
     window.center()
     window.setFrameAutosaveName("TelepathyControlPanel")
     super.init(window: window)
@@ -97,6 +121,12 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     window?.orderOut(nil)
   }
 
+  func selectPageForPreview(_ index: Int) {
+    guard index >= 0, index < Page.allCases.count else { return }
+    sourceList.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+    tabView.selectTabViewItem(at: index)
+  }
+
   func windowWillClose(_ notification: Notification) {
     finishShortcutRecording(with: nil)
   }
@@ -109,6 +139,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     screenFeedbackSwitch.state = state.screenFeedbackEnabled ? .on : .off
     explicitActivationMouseOverrideSwitch.state =
       state.explicitActivationOverridesMouseMovement ? .on : .off
+    updateActivationDependentControls(for: state.activationMode)
     rebuildActivationMenu(shortcutName: state.shortcut.displayName)
     selectActivationMode(state.activationMode)
     activationDetail.stringValue = state.activationMode.detail(
@@ -119,89 +150,174 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     selectAccentSource(state.accentTheme.source)
     accentColorWell.color = state.accentTheme.customColor.nsColor
     accentColorWell.isEnabled = state.accentTheme.source == .custom
-    applyAccent(state.resolvedAccent.nsColor)
+    accentColorWell.isHidden = state.accentTheme.source != .custom
+    applyAccent(TelepathySemantic.panelAccent(for: state.accentTheme))
     statusLabel.stringValue = state.status
+    sidebarStatusLabel.stringValue = state.enabled ? state.status : "Paused"
     detailLabel.stringValue = state.detail
     calibrationButton.title = state.calibrationButtonTitle
     calibrationButton.isEnabled = state.calibrationEnabled
     quickRecenterButton.isEnabled = state.quickRecenterEnabled
     permissionButton.isHidden = state.accessibilityReady
-    statusDot.color =
+    let statusColor =
       state.enabled && state.accessibilityReady
-      ? state.resolvedAccent.nsColor
-      : OverlayStyle.idle
+      ? TelepathySemantic.panelAccent(for: state.accentTheme)
+      : TelepathySemantic.secondaryText
+    statusDot.color = statusColor
+    sidebarStatusDot.color = statusColor
     statusDot.needsDisplay = true
+    sidebarStatusDot.needsDisplay = true
   }
 
   private func buildInterface() {
     guard let contentView = window?.contentView else { return }
 
-    let root = NSStackView()
-    root.orientation = .vertical
-    root.alignment = .leading
-    root.spacing = 20
-    root.translatesAutoresizingMaskIntoConstraints = false
-    contentView.addSubview(root)
+    let sidebar = makeSidebar()
+    let main = makeMainContent()
+    let divider = SidebarDividerView()
+    let shell = NSStackView(views: [sidebar, divider, main])
+    shell.orientation = .horizontal
+    shell.alignment = .top
+    shell.distribution = .fill
+    shell.spacing = 0
+    shell.translatesAutoresizingMaskIntoConstraints = false
+    contentView.addSubview(shell)
 
     NSLayoutConstraint.activate([
-      root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 32),
-      root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -32),
-      root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 28),
-      root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -28),
+      shell.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+      shell.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+      shell.topAnchor.constraint(equalTo: contentView.topAnchor),
+      shell.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+      sidebar.widthAnchor.constraint(equalToConstant: TelepathyComponent.sidebarWidth),
+      sidebar.heightAnchor.constraint(equalTo: shell.heightAnchor),
+      divider.widthAnchor.constraint(equalToConstant: TelepathyComponent.dividerWidth),
+      divider.heightAnchor.constraint(equalTo: shell.heightAnchor),
+      main.heightAnchor.constraint(equalTo: shell.heightAnchor),
     ])
-
-    for view in [makeHeader(), makeControlsSection(), makeStatusSection(), makeGuide()] {
-      root.addArrangedSubview(view)
-      view.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-    }
-
-    let shortcut = makeLabel(
-      "⌘⌥ESC  EMERGENCY PAUSE",
-      font: .monospacedSystemFont(ofSize: 11, weight: .medium),
-      color: OverlayStyle.telemetry
-    )
-    shortcut.alignment = .center
-    root.addArrangedSubview(shortcut)
-    shortcut.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
   }
 
-  private func makeHeader() -> NSView {
-    headerImage.image = NSImage(
-      systemSymbolName: "eye.circle.fill",
-      accessibilityDescription: "Telepathy"
-    )
-    headerImage.contentTintColor = OverlayStyle.accent
-    headerImage.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 28, weight: .medium)
-    headerImage.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      headerImage.widthAnchor.constraint(equalToConstant: 36),
-      headerImage.heightAnchor.constraint(equalToConstant: 36),
-    ])
+  private func makeSidebar() -> NSView {
+    let sidebar = SidebarBackgroundView()
 
+    logoView.translatesAutoresizingMaskIntoConstraints = false
     let title = makeLabel(
       "Telepathy",
-      font: .systemFont(ofSize: 28, weight: .semibold),
-      color: OverlayStyle.text
+      font: TelepathyComponent.sidebarTitleFont,
+      color: TelepathySemantic.text
     )
-    let subtitle = makeLabel(
-      "Attention chooses focus.",
-      font: .systemFont(ofSize: 13),
-      color: OverlayStyle.telemetry
+    let detail = makeLabel(
+      "Focus utility",
+      font: TelepathyComponent.sidebarDetailFont,
+      color: TelepathySemantic.secondaryText
     )
-    let copy = NSStackView(views: [title, subtitle])
-    copy.orientation = .vertical
-    copy.alignment = .leading
-    copy.spacing = OverlayStyle.space1
+    let brandCopy = NSStackView(views: [title, detail])
+    brandCopy.orientation = .vertical
+    brandCopy.alignment = .leading
+    brandCopy.spacing = TelepathyPrimitive.Space.x1
+    let brand = NSStackView(views: [logoView, brandCopy])
+    brand.orientation = .horizontal
+    brand.alignment = .centerY
+    brand.spacing = TelepathyPrimitive.Space.x3
+    brand.translatesAutoresizingMaskIntoConstraints = false
+    sidebar.addSubview(brand)
 
-    let header = NSStackView(views: [headerImage, copy])
-    header.orientation = .horizontal
-    header.alignment = .centerY
-    header.spacing = OverlayStyle.space3
-    return header
+    sourceList.headerView = nil
+    sourceList.style = .sourceList
+    sourceList.rowHeight = TelepathyComponent.sourceListRowHeight
+    sourceList.backgroundColor = .clear
+    sourceList.allowsEmptySelection = false
+    sourceList.delegate = self
+    sourceList.dataSource = self
+    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Navigation"))
+    column.resizingMask = .autoresizingMask
+    sourceList.addTableColumn(column)
+
+    let sourceScroll = NSScrollView()
+    sourceScroll.drawsBackground = false
+    sourceScroll.hasVerticalScroller = false
+    sourceScroll.documentView = sourceList
+    sourceScroll.translatesAutoresizingMaskIntoConstraints = false
+    sidebar.addSubview(sourceScroll)
+
+    configureStatusDot(sidebarStatusDot)
+    sidebarStatusLabel.font = TelepathyComponent.sidebarDetailFont
+    sidebarStatusLabel.textColor = TelepathySemantic.secondaryText
+    sidebarStatusLabel.maximumNumberOfLines = 2
+    sidebarStatusLabel.lineBreakMode = .byWordWrapping
+    let status = NSStackView(views: [sidebarStatusDot, sidebarStatusLabel])
+    status.orientation = .horizontal
+    status.alignment = .centerY
+    status.spacing = TelepathyPrimitive.Space.x2
+    let emergency = makeLabel(
+      "⌘⌥Esc pauses instantly",
+      font: TelepathyComponent.sidebarDetailFont,
+      color: TelepathySemantic.secondaryText
+    )
+    let footer = NSStackView(views: [status, emergency])
+    footer.orientation = .vertical
+    footer.alignment = .leading
+    footer.spacing = TelepathyPrimitive.Space.x2
+    footer.translatesAutoresizingMaskIntoConstraints = false
+    sidebar.addSubview(footer)
+
+    NSLayoutConstraint.activate([
+      logoView.widthAnchor.constraint(equalToConstant: TelepathyComponent.logoSize),
+      logoView.heightAnchor.constraint(equalToConstant: TelepathyComponent.logoSize),
+      brand.leadingAnchor.constraint(
+        equalTo: sidebar.leadingAnchor, constant: TelepathyComponent.sidebarInset),
+      brand.trailingAnchor.constraint(
+        lessThanOrEqualTo: sidebar.trailingAnchor, constant: -TelepathyComponent.sidebarInset),
+      brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: TelepathyPrimitive.Space.x6),
+      sourceScroll.leadingAnchor.constraint(
+        equalTo: sidebar.leadingAnchor, constant: TelepathyComponent.sidebarInset),
+      sourceScroll.trailingAnchor.constraint(
+        equalTo: sidebar.trailingAnchor, constant: -TelepathyComponent.sidebarInset),
+      sourceScroll.topAnchor.constraint(
+        equalTo: brand.bottomAnchor, constant: TelepathyPrimitive.Space.x6),
+      sourceScroll.bottomAnchor.constraint(
+        equalTo: footer.topAnchor, constant: -TelepathyPrimitive.Space.x4),
+      footer.leadingAnchor.constraint(
+        equalTo: sidebar.leadingAnchor, constant: TelepathyComponent.sidebarInset),
+      footer.trailingAnchor.constraint(
+        lessThanOrEqualTo: sidebar.trailingAnchor, constant: -TelepathyComponent.sidebarInset),
+      footer.bottomAnchor.constraint(
+        equalTo: sidebar.bottomAnchor, constant: -TelepathyPrimitive.Space.x4),
+    ])
+
+    sourceList.reloadData()
+    sourceList.selectRowIndexes(IndexSet(integer: Page.focus.rawValue), byExtendingSelection: false)
+    return sidebar
   }
 
-  private func makeControlsSection() -> NSView {
-    let section = PanelSectionView()
+  private func makeMainContent() -> NSView {
+    let main = NSView()
+
+    tabView.tabViewType = .noTabsNoBorder
+    tabView.translatesAutoresizingMaskIntoConstraints = false
+    main.addSubview(tabView)
+
+    let pages: [(Page, NSView)] = [
+      (.focus, makeFocusPage()),
+      (.calibration, makeCalibrationPage()),
+      (.feedback, makeFeedbackPage()),
+    ]
+    for (page, view) in pages {
+      let item = NSTabViewItem(identifier: page)
+      item.view = view
+      tabView.addTabViewItem(item)
+    }
+    tabView.selectTabViewItem(at: Page.focus.rawValue)
+
+    NSLayoutConstraint.activate([
+      tabView.leadingAnchor.constraint(equalTo: main.leadingAnchor),
+      tabView.trailingAnchor.constraint(equalTo: main.trailingAnchor),
+      tabView.topAnchor.constraint(equalTo: main.topAnchor),
+      tabView.bottomAnchor.constraint(equalTo: main.bottomAnchor),
+    ])
+    return main
+  }
+
+  private func configureControls() {
     powerSwitch.target = self
     powerSwitch.action = #selector(powerChanged)
     powerSwitch.setAccessibilityLabel("Focus follows gaze")
@@ -263,12 +379,21 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     if #available(macOS 13.0, *) {
       accentColorWell.colorWellStyle = .minimal
     }
+  }
 
-    let focusRow = makeToggleRow(
-      title: "Display handoff",
-      explanation: "Turn toward another screen to restore its recent window and pointer.",
-      control: powerSwitch
+  private func makeFocusPage() -> NSView {
+    configureControls()
+
+    let powerLabel = makeLabel(
+      "Telepathy",
+      font: TelepathyComponent.statusFont,
+      color: TelepathySemantic.text
     )
+    let powerControl = NSStackView(views: [powerLabel, powerSwitch])
+    powerControl.orientation = .horizontal
+    powerControl.alignment = .centerY
+    powerControl.spacing = TelepathyPrimitive.Space.x2
+
     let activationRow = makeActivationRow()
     let shortcutRow = makeSettingRow(
       title: "Keyboard shortcut",
@@ -281,8 +406,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       control: switchDelayPopup
     )
     let mouseOverrideRow = makeToggleRow(
-      title: "Mouse movement",
-      explanation: "Let Left Shift or middle mouse activate while the pointer is moving.",
+      title: "Activate while moving pointer",
+      explanation: "Keyboard or middle mouse can switch even while the pointer is moving.",
       control: explicitActivationMouseOverrideSwitch
     )
     let autoReturnRow = makeSettingRow(
@@ -290,56 +415,121 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       explanation: "Return to the previous screen unless physical mouse input adopts this one.",
       control: autoReturnPopup
     )
+    let activationGroup = makeLabeledSettingsGroup(
+      title: "Activation",
+      rows: [activationRow, shortcutRow, mouseOverrideRow]
+    )
+    let behaviorGroup = makeLabeledSettingsGroup(
+      title: "Handoff behavior",
+      rows: [delayRow, autoReturnRow]
+    )
+    return makePage(
+      title: "Focus",
+      detail: "Move attention between displays naturally.",
+      trailing: powerControl,
+      sections: [activationGroup, behaviorGroup]
+    )
+  }
+
+  private func makeCalibrationPage() -> NSView {
+    statusLabel.font = TelepathyComponent.rowTitleFont
+    statusLabel.textColor = TelepathySemantic.text
+    statusLabel.lineBreakMode = .byTruncatingTail
+    detailLabel.font = TelepathyComponent.rowDetailFont
+    detailLabel.textColor = TelepathySemantic.secondaryText
+    detailLabel.maximumNumberOfLines = 3
+    configureStatusDot(statusDot)
+
+    let statusCopy = NSStackView(views: [statusLabel, detailLabel])
+    statusCopy.orientation = .vertical
+    statusCopy.alignment = .leading
+    statusCopy.spacing = TelepathyPrimitive.Space.x1
+    let statusRow = NSStackView(views: [statusDot, statusCopy])
+    statusRow.orientation = .horizontal
+    statusRow.alignment = .centerY
+    statusRow.spacing = TelepathyPrimitive.Space.x3
+
+    permissionButton.target = self
+    permissionButton.action = #selector(requestAccessibility)
+    permissionButton.bezelStyle = .rounded
+    permissionButton.controlSize = .large
+
+    calibrationButton.target = self
+    calibrationButton.action = #selector(calibrate)
+    calibrationButton.bezelStyle = .rounded
+    calibrationButton.controlSize = .large
+    calibrationButton.keyEquivalent = "\r"
+    calibrationButton.setAccessibilityLabel("Run full calibration")
+
+    quickRecenterButton.target = self
+    quickRecenterButton.action = #selector(quickRecenter)
+    quickRecenterButton.bezelStyle = .rounded
+    quickRecenterButton.controlSize = .large
+    quickRecenterButton.setAccessibilityLabel("Quickly recenter head tracking")
+
+    let actions = NSStackView(views: [calibrationButton, quickRecenterButton, permissionButton])
+    actions.orientation = .horizontal
+    actions.alignment = .centerY
+    actions.spacing = TelepathyPrimitive.Space.x2
+
+    let statusGroup = makeSettingsGroup(rows: [
+      makeContainedRow(statusRow),
+      makeContainedRow(actions),
+    ])
+    let guideGroup = makeSettingsGroup(rows: [
+      makeGuideRow(
+        number: 1, text: "Look at each target while staying in a natural working posture."),
+      makeGuideRow(
+        number: 2, text: "Full Calibration samples every active display and normal movement."),
+      makeGuideRow(
+        number: 3,
+        text: "Quick Recenter adjusts for a posture change without replacing the profile."),
+    ])
+    return makePage(
+      title: "Calibration",
+      detail: "Keep screen selection accurate as your setup changes.",
+      trailing: nil,
+      sections: [statusGroup, guideGroup]
+    )
+  }
+
+  private func makeFeedbackPage() -> NSView {
     let accentControls = NSStackView(views: [accentSourcePopup, accentColorWell])
     accentControls.orientation = .horizontal
     accentControls.alignment = .centerY
-    accentControls.spacing = OverlayStyle.space2
+    accentControls.spacing = TelepathyPrimitive.Space.x2
     let accentRow = makeSettingRow(
       title: "Accent color",
-      explanation: "Use the macOS accent or one custom color across feedback and controls.",
+      explanation: "Follow macOS or choose one restrained signal color.",
       control: accentControls
     )
     let feedbackRow = makeToggleRow(
       title: "Screen shine",
-      explanation: "Briefly show an armed, dwelling, or completed screen handoff.",
+      explanation: "Briefly confirm an armed, dwelling, or completed handoff.",
       control: screenFeedbackSwitch
     )
     let indicatorRow = makeToggleRow(
-      title: "Experimental gaze indicator",
-      explanation: "Show the fine eye-and-head estimate used by the research mode.",
+      title: "Debug gaze area",
+      explanation: "Show the smoothed eye-and-head estimate while testing.",
       control: gazeIndicatorSwitch
     )
-    let dividers = (0..<8).map { _ -> NSBox in
-      let divider = NSBox()
-      divider.boxType = .separator
-      return divider
-    }
-    let rows: [NSView] = [
-      focusRow, dividers[0], activationRow, dividers[1], shortcutRow, dividers[2], delayRow,
-      dividers[3], mouseOverrideRow, dividers[4], autoReturnRow, dividers[5], accentRow,
-      dividers[6], feedbackRow, dividers[7], indicatorRow,
-    ]
-    let stack = NSStackView(
-      views: rows
+    let group = makeSettingsGroup(rows: [feedbackRow, indicatorRow, accentRow])
+    return makePage(
+      title: "Feedback",
+      detail: "Keep confirmation visible, brief, and quiet.",
+      trailing: nil,
+      sections: [group]
     )
-    stack.orientation = .vertical
-    stack.alignment = .leading
-    stack.spacing = 10
-    for view in rows {
-      view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-    }
-    pin(stack, inside: section)
-    return section
   }
 
   private func makeActivationRow() -> NSView {
     let titleLabel = makeLabel(
-      "Activation",
-      font: .systemFont(ofSize: 16, weight: .semibold),
-      color: OverlayStyle.text
+      "Method",
+      font: TelepathyComponent.rowTitleFont,
+      color: TelepathySemantic.text
     )
-    activationDetail.font = .systemFont(ofSize: 12)
-    activationDetail.textColor = OverlayStyle.telemetry
+    activationDetail.font = TelepathyComponent.rowDetailFont
+    activationDetail.textColor = TelepathySemantic.secondaryText
     activationDetail.maximumNumberOfLines = 2
     activationDetail.stringValue = ActivationMode.automatic.detail(
       shortcutName: ShortcutBinding.defaultValue.displayName)
@@ -347,14 +537,14 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     let labels = NSStackView(views: [titleLabel, activationDetail])
     labels.orientation = .vertical
     labels.alignment = .leading
-    labels.spacing = OverlayStyle.space1
+    labels.spacing = TelepathyPrimitive.Space.x1
 
     let row = NSStackView(views: [labels, activationPopup])
     row.orientation = .horizontal
     row.alignment = .centerY
     row.distribution = .fill
-    row.spacing = OverlayStyle.space4
-    return row
+    row.spacing = TelepathyComponent.rowGap
+    return makeContainedRow(row)
   }
 
   private func makeToggleRow(
@@ -364,27 +554,27 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   ) -> NSView {
     let titleLabel = makeLabel(
       title,
-      font: .systemFont(ofSize: 16, weight: .semibold),
-      color: OverlayStyle.text
+      font: TelepathyComponent.rowTitleFont,
+      color: TelepathySemantic.text
     )
     let explanationLabel = makeLabel(
       explanation,
-      font: .systemFont(ofSize: 12),
-      color: OverlayStyle.telemetry
+      font: TelepathyComponent.rowDetailFont,
+      color: TelepathySemantic.secondaryText
     )
     explanationLabel.maximumNumberOfLines = 2
 
     let labels = NSStackView(views: [titleLabel, explanationLabel])
     labels.orientation = .vertical
     labels.alignment = .leading
-    labels.spacing = OverlayStyle.space1
+    labels.spacing = TelepathyPrimitive.Space.x1
 
     let row = NSStackView(views: [labels, control])
     row.orientation = .horizontal
     row.alignment = .centerY
     row.distribution = .fill
-    row.spacing = OverlayStyle.space4
-    return row
+    row.spacing = TelepathyComponent.rowGap
+    return makeContainedRow(row)
   }
 
   private func makeSettingRow(
@@ -394,120 +584,171 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   ) -> NSView {
     let titleLabel = makeLabel(
       title,
-      font: .systemFont(ofSize: 16, weight: .semibold),
-      color: OverlayStyle.text
+      font: TelepathyComponent.rowTitleFont,
+      color: TelepathySemantic.text
     )
     let explanationLabel = makeLabel(
       explanation,
-      font: .systemFont(ofSize: 12),
-      color: OverlayStyle.telemetry
+      font: TelepathyComponent.rowDetailFont,
+      color: TelepathySemantic.secondaryText
     )
     explanationLabel.maximumNumberOfLines = 2
 
     let labels = NSStackView(views: [titleLabel, explanationLabel])
     labels.orientation = .vertical
     labels.alignment = .leading
-    labels.spacing = OverlayStyle.space1
+    labels.spacing = TelepathyPrimitive.Space.x1
 
     control.setContentHuggingPriority(.required, for: .horizontal)
     let row = NSStackView(views: [labels, control])
     row.orientation = .horizontal
     row.alignment = .centerY
     row.distribution = .fill
-    row.spacing = OverlayStyle.space4
-    return row
+    row.spacing = TelepathyComponent.rowGap
+    return makeContainedRow(row)
   }
 
-  private func makeStatusSection() -> NSView {
-    let section = PanelSectionView()
-    let eyebrow = makeLabel(
-      "STATUS",
-      font: .systemFont(ofSize: 10, weight: .semibold),
-      color: OverlayStyle.telemetry
+  private func makePage(
+    title: String,
+    detail: String,
+    trailing: NSView?,
+    sections: [NSView]
+  ) -> NSView {
+    let page = NSView()
+
+    let titleLabel = makeLabel(
+      title,
+      font: TelepathyComponent.pageTitleFont,
+      color: TelepathySemantic.text
     )
-    eyebrow.attributedStringValue = trackedString(
-      "STATUS",
-      font: eyebrow.font!,
-      color: OverlayStyle.telemetry
+    let detailLabel = makeLabel(
+      detail,
+      font: TelepathyComponent.pageDetailFont,
+      color: TelepathySemantic.secondaryText
     )
+    let copy = NSStackView(views: [titleLabel, detailLabel])
+    copy.orientation = .vertical
+    copy.alignment = .leading
+    copy.spacing = TelepathyPrimitive.Space.x1
 
-    statusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-    statusLabel.textColor = OverlayStyle.text
-    statusLabel.lineBreakMode = .byTruncatingTail
+    var headerViews: [NSView] = [copy]
+    if let trailing {
+      trailing.setContentHuggingPriority(.required, for: .horizontal)
+      headerViews.append(trailing)
+    }
+    let header = NSStackView(views: headerViews)
+    header.orientation = .horizontal
+    header.alignment = .centerY
+    header.distribution = .fill
+    header.spacing = TelepathyPrimitive.Space.x4
 
-    detailLabel.font = .systemFont(ofSize: 12)
-    detailLabel.textColor = OverlayStyle.telemetry
-    detailLabel.maximumNumberOfLines = 3
+    let root = NSStackView(views: [header] + sections)
+    root.orientation = .vertical
+    root.alignment = .leading
+    root.spacing = TelepathyComponent.sectionGap
+    root.translatesAutoresizingMaskIntoConstraints = false
+    page.addSubview(root)
+    for view in [header] + sections {
+      view.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+    }
 
-    statusDot.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      statusDot.widthAnchor.constraint(equalToConstant: 8),
-      statusDot.heightAnchor.constraint(equalToConstant: 8),
+      root.leadingAnchor.constraint(
+        equalTo: page.leadingAnchor, constant: TelepathyComponent.contentInset),
+      root.trailingAnchor.constraint(
+        equalTo: page.trailingAnchor, constant: -TelepathyComponent.contentInset),
+      root.topAnchor.constraint(equalTo: page.topAnchor, constant: TelepathyComponent.contentInset),
+      root.bottomAnchor.constraint(
+        lessThanOrEqualTo: page.bottomAnchor, constant: -TelepathyComponent.contentInset),
     ])
-    let statusRow = NSStackView(views: [statusDot, statusLabel])
-    statusRow.orientation = .horizontal
-    statusRow.alignment = .centerY
-    statusRow.spacing = OverlayStyle.space2
+    return page
+  }
 
-    permissionButton.target = self
-    permissionButton.action = #selector(requestAccessibility)
-    permissionButton.bezelStyle = .rounded
-    permissionButton.contentTintColor = OverlayStyle.accent
-    permissionButton.controlSize = .large
-
-    calibrationButton.target = self
-    calibrationButton.action = #selector(calibrate)
-    calibrationButton.bezelStyle = .rounded
-    calibrationButton.contentTintColor = OverlayStyle.accent
-    calibrationButton.controlSize = .large
-    calibrationButton.setAccessibilityLabel("Calibrate gaze tracking")
-
-    quickRecenterButton.target = self
-    quickRecenterButton.action = #selector(quickRecenter)
-    quickRecenterButton.bezelStyle = .rounded
-    quickRecenterButton.controlSize = .large
-    quickRecenterButton.setAccessibilityLabel("Quickly recenter head tracking")
-
-    let actions = NSStackView(views: [permissionButton, calibrationButton, quickRecenterButton])
-    actions.orientation = .horizontal
-    actions.alignment = .centerY
-    actions.spacing = OverlayStyle.space2
-
-    let stack = NSStackView(views: [eyebrow, statusRow, detailLabel, actions])
+  private func makeSettingsGroup(rows: [NSView]) -> NSView {
+    let group = SettingsGroupView()
+    let arranged: [NSView] = rows.enumerated().flatMap { index, row in
+      guard index < rows.count - 1 else { return [row] }
+      let divider = NSBox()
+      divider.boxType = .separator
+      return [row, divider]
+    }
+    let stack = NSStackView(views: arranged)
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = OverlayStyle.space2
-    pin(stack, inside: section)
+    stack.spacing = 0
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    group.addSubview(stack)
+    for view in arranged {
+      view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    }
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(equalTo: group.leadingAnchor),
+      stack.trailingAnchor.constraint(equalTo: group.trailingAnchor),
+      stack.topAnchor.constraint(equalTo: group.topAnchor),
+      stack.bottomAnchor.constraint(equalTo: group.bottomAnchor),
+    ])
+    return group
+  }
+
+  private func makeLabeledSettingsGroup(title: String, rows: [NSView]) -> NSView {
+    let titleLabel = makeLabel(
+      title,
+      font: TelepathyComponent.rowTitleFont,
+      color: TelepathySemantic.secondaryText
+    )
+    let group = makeSettingsGroup(rows: rows)
+    let section = NSStackView(views: [titleLabel, group])
+    section.orientation = .vertical
+    section.alignment = .leading
+    section.spacing = TelepathyPrimitive.Space.x2
+    group.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
     return section
   }
 
-  private func makeGuide() -> NSView {
-    let text = """
-      1  Run Full Calibration across every active display.
-      2  Turn toward another screen, then use your chosen activation.
-      3  Move the physical mouse whenever you want manual control.
-      """
-    let guide = makeLabel(
-      text,
-      font: .monospacedSystemFont(ofSize: 11, weight: .regular),
-      color: OverlayStyle.telemetry
-    )
-    guide.maximumNumberOfLines = 0
-    return guide
+  private func makeContainedRow(_ content: NSView) -> NSView {
+    let row = NSView()
+    content.translatesAutoresizingMaskIntoConstraints = false
+    row.addSubview(content)
+    NSLayoutConstraint.activate([
+      row.heightAnchor.constraint(
+        greaterThanOrEqualToConstant: TelepathyComponent.rowMinimumHeight),
+      content.leadingAnchor.constraint(
+        equalTo: row.leadingAnchor, constant: TelepathyComponent.rowInset),
+      content.trailingAnchor.constraint(
+        equalTo: row.trailingAnchor, constant: -TelepathyComponent.rowInset),
+      content.topAnchor.constraint(equalTo: row.topAnchor, constant: TelepathyPrimitive.Space.x3),
+      content.bottomAnchor.constraint(
+        equalTo: row.bottomAnchor, constant: -TelepathyPrimitive.Space.x3),
+    ])
+    return row
   }
 
-  private func pin(_ view: NSView, inside container: NSView) {
-    view.translatesAutoresizingMaskIntoConstraints = false
-    container.addSubview(view)
+  private func makeGuideRow(number: Int, text: String) -> NSView {
+    let image = NSImageView()
+    image.image = NSImage(
+      systemSymbolName: "\(number).circle",
+      accessibilityDescription: "Step \(number)"
+    )
+    image.contentTintColor = TelepathySemantic.secondaryText
+    image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+    let label = makeLabel(
+      text,
+      font: TelepathyComponent.rowDetailFont,
+      color: TelepathySemantic.secondaryText
+    )
+    label.maximumNumberOfLines = 2
+    let row = NSStackView(views: [image, label])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.spacing = TelepathyPrimitive.Space.x3
+    return makeContainedRow(row)
+  }
+
+  private func configureStatusDot(_ dot: StatusDotView) {
+    dot.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      view.leadingAnchor.constraint(
-        equalTo: container.leadingAnchor, constant: OverlayStyle.space4),
-      view.trailingAnchor.constraint(
-        equalTo: container.trailingAnchor,
-        constant: -OverlayStyle.space4
-      ),
-      view.topAnchor.constraint(equalTo: container.topAnchor, constant: OverlayStyle.space4),
-      view.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -OverlayStyle.space4),
+      dot.widthAnchor.constraint(equalToConstant: TelepathyComponent.statusDotSize),
+      dot.heightAnchor.constraint(equalToConstant: TelepathyComponent.statusDotSize),
     ])
   }
 
@@ -516,17 +757,6 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     label.font = font
     label.textColor = color
     return label
-  }
-
-  private func trackedString(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
-    NSAttributedString(
-      string: text,
-      attributes: [
-        .font: font,
-        .foregroundColor: color,
-        .kern: 1.4,
-      ]
-    )
   }
 
   @objc private func powerChanged() {
@@ -552,7 +782,17 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     let shortcutName =
       currentState?.shortcut.displayName ?? ShortcutBinding.defaultValue.displayName
     activationDetail.stringValue = mode.detail(shortcutName: shortcutName)
+    updateActivationDependentControls(for: mode)
     onActivationModeChanged?(mode)
+  }
+
+  private func updateActivationDependentControls(for mode: ActivationMode) {
+    let supportsExplicitOverride = mode == .keyboard || mode == .mouse
+    explicitActivationMouseOverrideSwitch.isEnabled = supportsExplicitOverride
+    explicitActivationMouseOverrideSwitch.toolTip =
+      supportsExplicitOverride
+      ? nil
+      : "Choose Keyboard or Middle Mouse activation to use this setting."
   }
 
   @objc private func beginShortcutRecording() {
@@ -587,6 +827,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       let source = AccentThemeSource(rawValue: rawValue)
     else { return }
     accentColorWell.isEnabled = source == .custom
+    accentColorWell.isHidden = source != .custom
     onAccentSourceChanged?(source)
   }
 
@@ -662,14 +903,12 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 
   private func applyAccent(_ accent: NSColor) {
-    headerImage.contentTintColor = accent
+    logoView.accentColor = accent
     powerSwitch.accentColor = accent
     explicitActivationMouseOverrideSwitch.accentColor = accent
     screenFeedbackSwitch.accentColor = accent
     gazeIndicatorSwitch.accentColor = accent
-    permissionButton.contentTintColor = accent
-    calibrationButton.contentTintColor = accent
-    quickRecenterButton.contentTintColor = accent
+    calibrationButton.bezelColor = accent
   }
 
   private static func shortcutBinding(from event: NSEvent) -> ShortcutBinding? {
@@ -745,24 +984,127 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   }
 }
 
-private final class PanelSectionView: NSView {
+@MainActor
+extension ControlPanelController: NSTableViewDataSource, NSTableViewDelegate {
+  func numberOfRows(in tableView: NSTableView) -> Int {
+    Page.allCases.count
+  }
+
+  func tableView(
+    _ tableView: NSTableView,
+    viewFor tableColumn: NSTableColumn?,
+    row: Int
+  ) -> NSView? {
+    guard let page = Page(rawValue: row) else { return nil }
+    let cell = NSTableCellView()
+    let image = NSImageView()
+    image.image = NSImage(
+      systemSymbolName: page.symbolName,
+      accessibilityDescription: nil
+    )
+    image.contentTintColor = TelepathySemantic.secondaryText
+    image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+    let label = NSTextField(labelWithString: page.title)
+    label.font = TelepathyComponent.rowTitleFont
+    label.textColor = TelepathySemantic.text
+    let stack = NSStackView(views: [image, label])
+    stack.orientation = .horizontal
+    stack.alignment = .centerY
+    stack.spacing = TelepathyPrimitive.Space.x2
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    cell.addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(
+        equalTo: cell.leadingAnchor, constant: TelepathyPrimitive.Space.x2),
+      stack.trailingAnchor.constraint(
+        lessThanOrEqualTo: cell.trailingAnchor, constant: -TelepathyPrimitive.Space.x2),
+      stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+    ])
+    return cell
+  }
+
+  func tableViewSelectionDidChange(_ notification: Notification) {
+    let selected = max(sourceList.selectedRow, 0)
+    guard Page(rawValue: selected) != nil,
+      selected < tabView.numberOfTabViewItems
+    else { return }
+    tabView.selectTabViewItem(at: selected)
+  }
+}
+
+private final class SettingsGroupView: NSView {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    layer?.backgroundColor = OverlayStyle.surface.cgColor
-    layer?.borderColor = OverlayStyle.border.cgColor
-    layer?.borderWidth = 1
-    layer?.cornerRadius = OverlayStyle.panelCornerRadius
+    refreshAppearance()
   }
 
   @available(*, unavailable)
   required init?(coder: NSCoder) {
     nil
   }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    refreshAppearance()
+  }
+
+  private func refreshAppearance() {
+    layer?.backgroundColor = TelepathySemantic.surface.cgColor
+    layer?.borderColor = TelepathySemantic.border.cgColor
+    layer?.borderWidth = TelepathyComponent.dividerWidth
+    layer?.cornerRadius = TelepathyComponent.groupRadius
+  }
+}
+
+private final class SidebarBackgroundView: NSView {
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    refreshAppearance()
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    nil
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    refreshAppearance()
+  }
+
+  private func refreshAppearance() {
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      layer?.backgroundColor = TelepathySemantic.sidebar.cgColor
+    }
+  }
+}
+
+private final class SidebarDividerView: NSView {
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    refreshAppearance()
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    nil
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    refreshAppearance()
+  }
+
+  private func refreshAppearance() {
+    layer?.backgroundColor = TelepathySemantic.border.cgColor
+  }
 }
 
 private final class StatusDotView: NSView {
-  var color = OverlayStyle.idle
+  var color = TelepathySemantic.secondaryText
 
   override func draw(_ dirtyRect: NSRect) {
     color.setFill()

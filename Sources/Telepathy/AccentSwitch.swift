@@ -15,6 +15,10 @@ final class AccentSwitch: NSButton {
     }
   }
 
+  override var isEnabled: Bool {
+    didSet { needsDisplay = true }
+  }
+
   override var intrinsicContentSize: NSSize {
     NSSize(width: 42, height: 24)
   }
@@ -35,9 +39,14 @@ final class AccentSwitch: NSButton {
 
   override func draw(_ dirtyRect: NSRect) {
     let track = bounds.insetBy(dx: 1, dy: 2)
-    let trackColor = state == .on
-      ? accentColor.withAlphaComponent(isHighlighted ? 0.78 : 0.94)
-      : OverlayStyle.idle.withAlphaComponent(isHighlighted ? 0.32 : 0.24)
+    let trackColor =
+      if !isEnabled {
+        OverlayStyle.idle.withAlphaComponent(0.18)
+      } else if state == .on {
+        accentColor.withAlphaComponent(isHighlighted ? 0.78 : 0.94)
+      } else {
+        OverlayStyle.idle.withAlphaComponent(isHighlighted ? 0.32 : 0.24)
+      }
     trackColor.setFill()
     NSBezierPath(roundedRect: track, xRadius: track.height / 2, yRadius: track.height / 2).fill()
 
