@@ -39,13 +39,13 @@ final class TelepathyLogoView: NSView {
       width: markSize.width,
       height: markSize.height
     )
-    Self.drawPeripheralMark(in: markRect, color: accentColor)
+    Self.drawSentinelMark(in: markRect, color: accentColor)
   }
 
   static func statusItemImage() -> NSImage {
     let size = NSSize(width: 18, height: 18)
     let image = NSImage(size: size, flipped: false) { rect in
-      drawPeripheralMark(in: rect, color: .labelColor)
+      drawSentinelMark(in: rect, color: .labelColor)
       return true
     }
     image.isTemplate = true
@@ -53,57 +53,34 @@ final class TelepathyLogoView: NSView {
     return image
   }
 
-  private static func drawPeripheralMark(in rect: NSRect, color: NSColor) {
+  private static func drawSentinelMark(in rect: NSRect, color: NSColor) {
     let scale = rect.width / 64
     let point: (CGFloat, CGFloat) -> NSPoint = { x, y in
       NSPoint(x: rect.minX + x * scale, y: rect.maxY - y * scale)
     }
 
-    color.setStroke()
-    let brackets = NSBezierPath()
-    brackets.lineWidth = 5 * scale
-    brackets.lineCapStyle = .round
-    brackets.lineJoinStyle = .round
-    brackets.move(to: point(20, 12))
-    brackets.line(to: point(9, 12))
-    brackets.line(to: point(9, 52))
-    brackets.line(to: point(20, 52))
-    brackets.move(to: point(44, 12))
-    brackets.line(to: point(55, 12))
-    brackets.line(to: point(55, 52))
-    brackets.line(to: point(44, 52))
-    brackets.stroke()
-
-    let eye = NSBezierPath()
-    eye.lineWidth = 4 * scale
-    eye.lineJoinStyle = .round
-    eye.move(to: point(18, 32))
-    eye.curve(
-      to: point(36, 20),
-      controlPoint1: point(23, 24),
-      controlPoint2: point(29, 20)
-    )
-    eye.curve(
-      to: point(54, 32),
-      controlPoint1: point(43, 20),
-      controlPoint2: point(49, 24)
-    )
-    eye.curve(
-      to: point(36, 44),
-      controlPoint1: point(49, 40),
-      controlPoint2: point(43, 44)
-    )
-    eye.curve(
-      to: point(18, 32),
-      controlPoint1: point(29, 44),
-      controlPoint2: point(23, 40)
-    )
-    eye.close()
-    eye.stroke()
-
     color.setFill()
-    let pupilRadius = 6 * scale
-    let pupilCenter = point(40, 32)
+    let body = NSBezierPath()
+    body.windingRule = .evenOdd
+    body.move(to: point(32, 3))
+    body.line(to: point(57, 15.5))
+    body.line(to: point(57, 40.5))
+    body.line(to: point(45.3, 51))
+    body.line(to: point(32, 61))
+    body.line(to: point(18.7, 51))
+    body.line(to: point(7, 40.5))
+    body.line(to: point(7, 15.5))
+    body.close()
+    body.move(to: point(32, 18.2))
+    body.line(to: point(14.5, 31.2))
+    body.line(to: point(25, 42.8))
+    body.line(to: point(39, 42.8))
+    body.line(to: point(49.5, 31.2))
+    body.close()
+    body.fill()
+
+    let pupilRadius = 6.4 * scale
+    let pupilCenter = point(32, 31.2)
     let pupil = NSRect(
       x: pupilCenter.x - pupilRadius,
       y: pupilCenter.y - pupilRadius,

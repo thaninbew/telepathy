@@ -21,8 +21,8 @@ proposals, not shipping assets.
 - **Watcher:** an asymmetrical peripheral eye-creature. It has the strongest
   personality, but is the least formal direction.
 
-**Recommendation:** Cyclops. It reduces the brand to one memorable character,
-works as a filled macOS template image, and stays legible at 18 px.
+**Selected:** Sentinel. Its faceted silhouette is now used by the native control
+panel and the 18 px macOS menu-bar template image.
 
 ## Reference boundary
 
