@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telepathy logo exploration</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f2efe8;
+      --ink: #141311;
+      --muted: #6f6a62;
+      --line: #d5cfc5;
+      --panel: #fbf9f5;
+      --night: #151412;
+      --accent: #d88732;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --space-12: 48px;
+      --radius: 24px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 400 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: var(--space-12) 0 64px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 380px);
+      gap: var(--space-8);
+      align-items: end;
+      padding-bottom: var(--space-8);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .kicker {
+      margin: 0 0 var(--space-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 12ch;
+      margin: 0;
+      font-size: clamp(38px, 7vw, 72px);
+      font-weight: 680;
+      letter-spacing: -.05em;
+      line-height: .95;
+    }
+
+    .brief { margin: 0; color: var(--muted); }
+
+    .recommendation {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: var(--space-4);
+      align-items: center;
+      margin: var(--space-8) 0;
+      padding: var(--space-4) 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .recommendation strong { font-size: 18px; }
+    .recommendation p { margin: 0; color: var(--muted); }
+
+    .concepts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+    }
+
+    article {
+      min-width: 0;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .stage {
+      display: grid;
+      place-items: center;
+      min-height: 260px;
+      color: var(--ink);
+    }
+
+    .mark {
+      display: block;
+      width: var(--size);
+      height: var(--size);
+      background: currentColor;
+      -webkit-mask: var(--asset) center / contain no-repeat;
+      mask: var(--asset) center / contain no-repeat;
+    }
+
+    .large { --size: 132px; }
+    .panel-size { --size: 38px; }
+    .menu-size { --size: 18px; }
+
+    .samples {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .sample {
+      display: flex;
+      min-height: 72px;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-3);
+    }
+
+    .sample + .sample { border-left: 1px solid var(--line); }
+    .sample.dark { background: var(--night); color: white; }
+    .sample.accent { background: var(--panel); color: var(--accent); }
+
+    .copy { padding: var(--space-6); }
+
+    .number {
+      margin: 0 0 var(--space-2);
+      color: var(--muted);
+      font: 600 12px/1 ui-monospace, "SFMono-Regular", monospace;
+    }
+
+    h2 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
+    .description { min-height: 68px; margin: var(--space-2) 0 var(--space-4); color: var(--muted); }
+
+    dl {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: var(--space-2) var(--space-3);
+      margin: 0;
+      font-size: 13px;
+    }
+
+    dt { color: var(--muted); }
+    dd { margin: 0; }
+
+    .principle {
+      display: grid;
+      grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr);
+      gap: var(--space-8);
+      margin-top: var(--space-12);
+      padding-top: var(--space-8);
+      border-top: 1px solid var(--line);
+    }
+
+    .principle h2 { font-size: 28px; }
+    .principle p { margin: 0; color: var(--muted); }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-6);
+      margin-top: var(--space-8);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    footer p { margin: 0; }
+
+    @media (max-width: 820px) {
+      header { grid-template-columns: 1fr; align-items: start; }
+      h1 { max-width: none; }
+      .concepts { grid-template-columns: 1fr; }
+      .description { min-height: 0; }
+    }
+
+    @media (max-width: 480px) {
+      main { width: min(100% - 24px, 1120px); padding-top: var(--space-8); }
+      .recommendation, .principle { grid-template-columns: 1fr; gap: var(--space-2); }
+      .stage { min-height: 220px; }
+      .large { --size: 116px; }
+      footer { display: grid; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #10100f;
+        --ink: #f2eee7;
+        --muted: #aaa39a;
+        --line: #36322e;
+        --panel: #191816;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="kicker">Telepathy mark study · 02</p>
+        <h1>Build a creature, not an icon.</h1>
+      </div>
+      <p class="brief">Three original one-eyed silhouettes. Each uses a solid body and carved negative space so it reads as a character at a glance, not another eye glyph from an icon set.</p>
+    </header>
+
+    <section class="recommendation" aria-label="Recommendation">
+      <strong>Selected: Sentinel.</strong>
+      <p>The faceted optical guardian is now the native control-panel and 18 px menu-bar mark.</p>
+    </section>
+
+    <section class="concepts" aria-label="Logo concepts">
+      <article style="--asset: url('./concepts/cyclops.svg')">
+        <div class="stage"><span class="mark large" aria-hidden="true"></span></div>
+        <div class="samples">
+          <div class="sample accent"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+          <div class="sample dark"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+        </div>
+        <div class="copy">
+          <p class="number">01</p>
+          <h2>Cyclops</h2>
+          <p class="description">A single-eyed monolith cut from one solid body. Calm, strange, and immediately legible.</p>
+          <dl><dt>Signal</dt><dd>Character</dd><dt>Strength</dt><dd>Ownable silhouette</dd><dt>Risk</dt><dd>Most mascot-like</dd></dl>
+        </div>
+      </article>
+
+      <article style="--asset: url('./concepts/sentinel.svg')">
+        <div class="stage"><span class="mark large" aria-hidden="true"></span></div>
+        <div class="samples">
+          <div class="sample accent"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+          <div class="sample dark"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+        </div>
+        <div class="copy">
+          <p class="number">02 · selected</p>
+          <h2>Sentinel</h2>
+          <p class="description">A faceted optical guardian. One eye, one crown, and a deliberately technical posture.</p>
+          <dl><dt>Signal</dt><dd>Vigilance</dd><dt>Strength</dt><dd>Sharp at small size</dd><dt>Risk</dt><dd>Feels security-led</dd></dl>
+        </div>
+      </article>
+
+      <article style="--asset: url('./concepts/watcher.svg')">
+        <div class="stage"><span class="mark large" aria-hidden="true"></span></div>
+        <div class="samples">
+          <div class="sample accent"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+          <div class="sample dark"><span class="mark panel-size" aria-hidden="true"></span><span class="mark menu-size" aria-hidden="true"></span></div>
+        </div>
+        <div class="copy">
+          <p class="number">03</p>
+          <h2>Watcher</h2>
+          <p class="description">An asymmetrical eye-creature turning toward peripheral motion. The strangest and most animated direction.</p>
+          <dl><dt>Signal</dt><dd>Curious presence</dd><dt>Strength</dt><dd>Most memorable</dd><dt>Risk</dt><dd>Least formal</dd></dl>
+        </div>
+      </article>
+    </section>
+
+    <section class="principle">
+      <h2>Why this feels more like a brand.</h2>
+      <p>Modern marks become recognizable through a proprietary filled silhouette and disciplined negative space, not through extra detail. The Cyclops and eye-monster references are thematic only. No game, platform, or existing logo geometry is reproduced.</p>
+    </section>
+
+    <footer>
+      <p>True-size samples: 38 px panel mark + 18 px menu-bar mark.</p>
+      <p>SVG · one color · no background · original geometry</p>
+    </footer>
+  </main>
+</body>
+</html>

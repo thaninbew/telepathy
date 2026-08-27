@@ -121,10 +121,16 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     window?.orderOut(nil)
   }
 
-  func selectPageForPreview(_ index: Int) {
+  func selectPage(_ index: Int) {
     guard index >= 0, index < Page.allCases.count else { return }
     sourceList.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
     tabView.selectTabViewItem(at: index)
+  }
+
+  func presentShortcutRecorder() {
+    selectPage(Page.focus.rawValue)
+    present()
+    beginShortcutRecording()
   }
 
   func windowWillClose(_ notification: Notification) {

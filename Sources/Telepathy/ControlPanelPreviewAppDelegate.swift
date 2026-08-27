@@ -38,7 +38,7 @@ final class ControlPanelPreviewAppDelegate: NSObject, NSApplicationDelegate {
     if let rawPage = ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_PAGE"],
       let page = Int(rawPage)
     {
-      panel.selectPageForPreview(page)
+      panel.selectPage(page)
     }
     panel.present()
   }

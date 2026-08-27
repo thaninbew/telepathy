@@ -859,6 +859,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private func refreshMenu() {
     guard let menu else { return }
+    rebuildStatusMenu(menu)
+  }
+
+  func rebuildStatusMenu(_ menu: NSMenu) {
     menu.removeAllItems()
 
     if let button = statusItem?.button {
@@ -875,31 +879,28 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     menu.addItem(openItem)
     menu.addItem(.separator())
 
-    let status = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+    let status = NSMenuItem(title: "Status: \(statusText)", action: nil, keyEquivalent: "")
     status.isEnabled = false
     menu.addItem(status)
-    menu.addItem(.separator())
+
+    if !accessibility.isTrusted {
+      let permissionItem = NSMenuItem(
+        title: "Grant Accessibility Access…",
+        action: #selector(requestAccessibility),
+        keyEquivalent: ""
+      )
+      permissionItem.target = self
+      menu.addItem(permissionItem)
+    }
 
     let enabledItem = NSMenuItem(
-      title: enabled ? "Turn Telepathy Off" : "Turn Telepathy On",
+      title: enabled ? "Pause Telepathy" : "Resume Telepathy",
       action: #selector(toggleEnabled),
-      keyEquivalent: ""
+      keyEquivalent: "\u{1b}"
     )
     enabledItem.target = self
+    enabledItem.keyEquivalentModifierMask = [.command, .option]
     menu.addItem(enabledItem)
-
-    let feedbackItem = NSMenuItem(
-      title: "Show screen shine", action: #selector(toggleScreenFeedback), keyEquivalent: "")
-    feedbackItem.target = self
-    feedbackItem.state = screenFeedbackEnabled ? .on : .off
-    menu.addItem(feedbackItem)
-
-    let debugItem = NSMenuItem(
-      title: "Show experimental gaze indicator", action: #selector(toggleDebugOverlay),
-      keyEquivalent: "")
-    debugItem.target = self
-    debugItem.state = debugOverlayEnabled ? .on : .off
-    menu.addItem(debugItem)
 
     let activationItem = NSMenuItem(title: "Activation", action: nil, keyEquivalent: "")
     let activationMenu = NSMenu(title: "Activation")
@@ -915,9 +916,20 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       activationMenu.addItem(item)
     }
     activationMenu.addItem(.separator())
+    let mouseOverrideItem = NSMenuItem(
+      title: "Allow Activation While Moving Pointer",
+      action: #selector(toggleExplicitActivationMouseOverride),
+      keyEquivalent: ""
+    )
+    mouseOverrideItem.target = self
+    mouseOverrideItem.state = explicitActivationOverridesMouseMovement ? .on : .off
+    mouseOverrideItem.isEnabled = activationMode == .keyboard || activationMode == .mouse
+    mouseOverrideItem.toolTip = "Available with Keyboard or Middle Mouse activation."
+    activationMenu.addItem(mouseOverrideItem)
+
     let configureShortcut = NSMenuItem(
-      title: "Configure shortcut…",
-      action: #selector(openControlPanel),
+      title: "Change Keyboard Shortcut…",
+      action: #selector(changeKeyboardShortcut),
       keyEquivalent: ""
     )
     configureShortcut.target = self
@@ -925,32 +937,40 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     activationItem.submenu = activationMenu
     menu.addItem(activationItem)
 
+    let feedbackItem = NSMenuItem(title: "Feedback", action: nil, keyEquivalent: "")
+    let feedbackMenu = NSMenu(title: "Feedback")
+    let shineItem = NSMenuItem(
+      title: "Screen Shine",
+      action: #selector(toggleScreenFeedback),
+      keyEquivalent: ""
+    )
+    shineItem.target = self
+    shineItem.state = screenFeedbackEnabled ? .on : .off
+    feedbackMenu.addItem(shineItem)
+
+    let debugItem = NSMenuItem(
+      title: "Gaze Indicator (Experimental)",
+      action: #selector(toggleDebugOverlay),
+      keyEquivalent: ""
+    )
+    debugItem.target = self
+    debugItem.state = debugOverlayEnabled ? .on : .off
+    feedbackMenu.addItem(debugItem)
+    feedbackItem.submenu = feedbackMenu
+    menu.addItem(feedbackItem)
+
     let warpItem = NSMenuItem(
-      title: "Warp pointer on transfer", action: #selector(toggleWarpPointer), keyEquivalent: "")
+      title: "Move Pointer with Focus",
+      action: #selector(toggleWarpPointer),
+      keyEquivalent: ""
+    )
     warpItem.target = self
     warpItem.state = warpPointer ? .on : .off
+    warpItem.toolTip = "Move the pointer to the focused display after a transfer."
     menu.addItem(warpItem)
 
-    let mouseOverrideItem = NSMenuItem(
-      title: "Allow explicit activation while moving mouse",
-      action: #selector(toggleExplicitActivationMouseOverride),
-      keyEquivalent: ""
-    )
-    mouseOverrideItem.target = self
-    mouseOverrideItem.state = explicitActivationOverridesMouseMovement ? .on : .off
-    menu.addItem(mouseOverrideItem)
-
-    menu.addItem(.separator())
-
-    let calibrationItem = NSMenuItem(
-      title: "Full Calibration…",
-      action: #selector(beginCalibration),
-      keyEquivalent: ""
-    )
-    calibrationItem.target = self
-    calibrationItem.isEnabled = cameraState == .running && !isCalibrating
-    menu.addItem(calibrationItem)
-
+    let calibrationRootItem = NSMenuItem(title: "Calibration", action: nil, keyEquivalent: "")
+    let calibrationMenu = NSMenu(title: "Calibration")
     let quickItem = NSMenuItem(
       title: "Quick Recenter…",
       action: #selector(beginQuickRecenter),
@@ -958,27 +978,30 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     )
     quickItem.target = self
     quickItem.isEnabled = trackingReady && cameraState == .running && !isCalibrating
-    menu.addItem(quickItem)
+    calibrationMenu.addItem(quickItem)
 
-    if !accessibility.isTrusted {
-      let permissionItem = NSMenuItem(
-        title: "Request Accessibility access…", action: #selector(requestAccessibility),
-        keyEquivalent: "")
-      permissionItem.target = self
-      menu.addItem(permissionItem)
-    }
+    let fullCalibrationItem = NSMenuItem(
+      title: "Full Calibration…",
+      action: #selector(beginCalibration),
+      keyEquivalent: ""
+    )
+    fullCalibrationItem.target = self
+    fullCalibrationItem.isEnabled = cameraState == .running && !isCalibrating
+    calibrationMenu.addItem(fullCalibrationItem)
+    calibrationMenu.addItem(.separator())
 
     let resetItem = NSMenuItem(
-      title: "Reset current calibration…", action: #selector(resetCalibration), keyEquivalent: "")
+      title: "Reset Calibration…",
+      action: #selector(resetCalibration),
+      keyEquivalent: ""
+    )
     resetItem.target = self
     resetItem.isEnabled = mapper.sampleCount > 0
-    menu.addItem(resetItem)
+    calibrationMenu.addItem(resetItem)
+    calibrationRootItem.submenu = calibrationMenu
+    menu.addItem(calibrationRootItem)
 
     menu.addItem(.separator())
-    let emergency = NSMenuItem(title: "Emergency pause: ⌘⌥Esc", action: nil, keyEquivalent: "")
-    emergency.isEnabled = false
-    menu.addItem(emergency)
-
     let quitItem = NSMenuItem(title: "Quit Telepathy", action: #selector(quit), keyEquivalent: "q")
     quitItem.target = self
     menu.addItem(quitItem)
@@ -1317,6 +1340,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   @objc private func openControlPanel() {
     controlPanel.present()
+  }
+
+  @objc private func changeKeyboardShortcut() {
+    controlPanel.presentShortcutRecorder()
   }
 
   @objc private func resetCalibration() {

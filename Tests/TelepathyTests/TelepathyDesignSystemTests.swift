@@ -26,7 +26,7 @@ final class TelepathyDesignSystemTests: XCTestCase {
     }
   }
 
-  func testStatusItemUsesThePeripheralMarkAsATemplateImage() {
+  func testStatusItemUsesTheSentinelMarkAsATemplateImage() {
     let image = TelepathyLogoView.statusItemImage()
 
     XCTAssertEqual(image.size, NSSize(width: 18, height: 18))

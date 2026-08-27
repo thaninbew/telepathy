@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Glance</title>
+  <desc>A simple eye contour with its focus shifted toward the next display.</desc>
+  <path
+    d="M7.5 32C13.8 21.5 22.8 16 32 16s18.2 5.5 24.5 16C50.2 42.5 41.2 48 32 48S13.8 42.5 7.5 32Z"
+    stroke="currentColor"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="38" cy="32" r="6" fill="currentColor" />
+</svg>
