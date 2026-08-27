@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Sentinel</title>
+  <desc>A faceted optical guardian with one central eye and a directional crown.</desc>
+  <path
+    fill="currentColor"
+    fill-rule="evenodd"
+    d="M32 3 57 15.5v25L45.3 51 32 61 18.7 51 7 40.5v-25L32 3Zm0 15.2-17.5 13L25 42.8h14l10.5-11.6-17.5-13Z"
+    clip-rule="evenodd"
+  />
+  <circle cx="32" cy="31.2" r="6.4" fill="currentColor" />
+</svg>
