@@ -23,6 +23,11 @@ final class AccentSwitch: NSButton {
     NSSize(width: 42, height: 24)
   }
 
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    needsDisplay = true
+  }
+
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     setButtonType(.toggle)

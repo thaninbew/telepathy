@@ -12,10 +12,9 @@ final class TelepathyLogoView: NSView {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    layer?.backgroundColor = TelepathySemantic.raised.cgColor
-    layer?.borderColor = TelepathySemantic.border.cgColor
     layer?.borderWidth = TelepathyComponent.dividerWidth
     layer?.cornerRadius = TelepathyComponent.iconRadius
+    refreshAppearance()
   }
 
   @available(*, unavailable)
@@ -25,8 +24,7 @@ final class TelepathyLogoView: NSView {
 
   override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
-    layer?.backgroundColor = TelepathySemantic.raised.cgColor
-    layer?.borderColor = TelepathySemantic.border.cgColor
+    refreshAppearance()
     needsDisplay = true
   }
 
@@ -39,7 +37,9 @@ final class TelepathyLogoView: NSView {
       width: markSize.width,
       height: markSize.height
     )
-    Self.drawSentinelMark(in: markRect, color: accentColor)
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      Self.drawSentinelMark(in: markRect, color: accentColor)
+    }
   }
 
   static func statusItemImage() -> NSImage {
@@ -51,6 +51,17 @@ final class TelepathyLogoView: NSView {
     image.isTemplate = true
     image.accessibilityDescription = "Telepathy"
     return image
+  }
+
+  private func refreshAppearance() {
+    layer?.backgroundColor = TelepathySemantic.cgColor(
+      TelepathySemantic.raised,
+      for: effectiveAppearance
+    )
+    layer?.borderColor = TelepathySemantic.cgColor(
+      TelepathySemantic.border,
+      for: effectiveAppearance
+    )
   }
 
   private static func drawSentinelMark(in rect: NSRect, color: NSColor) {
