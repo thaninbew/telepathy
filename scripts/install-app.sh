@@ -20,6 +20,8 @@ fi
 rm -rf "$STAGING"
 mkdir -p "$(dirname "$DESTINATION")"
 ditto "$SOURCE" "$STAGING"
+cp "$ROOT/Resources/Info.plist" "$STAGING/Contents/Info.plist"
+codesign --force --deep --sign - "$STAGING"
 codesign --verify --deep --strict "$STAGING"
 rm -rf "$DESTINATION"
 mv "$STAGING" "$DESTINATION"

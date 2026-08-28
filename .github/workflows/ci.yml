@@ -14,3 +14,7 @@ jobs:
         run: swift test
       - name: Build app bundle
         run: ./scripts/build-app.sh release
+      - name: Verify development bundle identity
+        run: |
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Telepathy.app/Contents/Info.plist)" = "app.telepathy.macos.development"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' build/Telepathy.app/Contents/Info.plist)" = "Telepathy Development"
