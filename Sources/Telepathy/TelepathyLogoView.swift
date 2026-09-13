@@ -53,6 +53,22 @@ final class TelepathyLogoView: NSView {
     return image
   }
 
+  static func applicationIconImage() -> NSImage {
+    let size = NSSize(width: 512, height: 512)
+    let image = NSImage(size: size, flipped: false) { rect in
+      let tileRect = rect.insetBy(dx: 32, dy: 32)
+      let tile = NSBezierPath(roundedRect: tileRect, xRadius: 112, yRadius: 112)
+      NSColor(calibratedRed: 0.075, green: 0.082, blue: 0.094, alpha: 1).setFill()
+      tile.fill()
+
+      let markRect = rect.insetBy(dx: 108, dy: 108)
+      drawSentinelMark(in: markRect, color: AccentColor.gold.nsColor)
+      return true
+    }
+    image.accessibilityDescription = "Telepathy"
+    return image
+  }
+
   private func refreshAppearance() {
     layer?.backgroundColor = TelepathySemantic.cgColor(
       TelepathySemantic.raised,

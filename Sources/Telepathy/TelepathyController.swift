@@ -839,6 +839,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private func configureStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    item.autosaveName = "Telepathy"
+    item.isVisible = true
     if let button = item.button {
       button.image = TelepathyLogoView.statusItemImage()
       button.imagePosition = .imageOnly
@@ -1339,6 +1341,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   @objc private func openControlPanel() {
+    presentControlPanel()
+  }
+
+  func presentControlPanel() {
     controlPanel.present()
   }
 

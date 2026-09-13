@@ -95,4 +95,37 @@ final class TelepathyDesignSystemTests: XCTestCase {
     XCTAssertTrue(image.isTemplate)
     XCTAssertEqual(image.accessibilityDescription, "Telepathy")
   }
+
+  func testStatusItemMarkHasVisibleAlphaCoverage() throws {
+    let image = TelepathyLogoView.statusItemImage()
+    let representation = try XCTUnwrap(image.tiffRepresentation)
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: representation))
+    var visiblePixels = 0
+
+    for x in 0..<bitmap.pixelsWide {
+      for y in 0..<bitmap.pixelsHigh where bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.1 {
+        visiblePixels += 1
+      }
+    }
+
+    XCTAssertGreaterThan(visiblePixels, 80)
+  }
+
+  func testApplicationIconUsesTheSentinelMark() throws {
+    let image = TelepathyLogoView.applicationIconImage()
+    let representation = try XCTUnwrap(image.tiffRepresentation)
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: representation))
+    var visiblePixels = 0
+
+    for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+      for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8)
+      where bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.1 {
+        visiblePixels += 1
+      }
+    }
+
+    XCTAssertEqual(image.size, NSSize(width: 512, height: 512))
+    XCTAssertEqual(image.accessibilityDescription, "Telepathy")
+    XCTAssertGreaterThan(visiblePixels, 1_000)
+  }
 }
