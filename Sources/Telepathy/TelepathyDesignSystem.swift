@@ -77,6 +77,10 @@ enum TelepathySemantic {
   static let secondaryText = dynamic(\.secondaryText)
   static let border = dynamic(\.border)
 
+  static func mode(for appearance: NSAppearance) -> Mode {
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+  }
+
   static func palette(for mode: Mode) -> TelepathySemanticPalette {
     switch mode {
     case .light:
@@ -104,14 +108,29 @@ enum TelepathySemantic {
 
   static func panelAccent(for theme: AccentTheme) -> NSColor {
     guard theme.source == .custom else { return .controlAccentColor }
-    let preferred = theme.customColor
-    let light = preferred.adjustedForContrast(
-      against: AccentColor(color: palette(for: .light).surface), minimumRatio: 3
-    ).nsColor
-    let dark = preferred.adjustedForContrast(
-      against: AccentColor(color: palette(for: .dark).surface), minimumRatio: 3
-    ).nsColor
+    let light = panelAccent(for: theme, mode: .light)
+    let dark = panelAccent(for: theme, mode: .dark)
     return dynamic(light: light, dark: dark)
+  }
+
+  static func panelAccent(for theme: AccentTheme, mode: Mode) -> NSColor {
+    let preferred =
+      theme.source == .system ? AccentColor(color: .controlAccentColor) : theme.customColor
+    return preferred.adjustedForContrast(
+      against: AccentColor(color: palette(for: mode).raised), minimumRatio: 3.1
+    ).nsColor
+  }
+
+  static func resolved(_ color: NSColor, for appearance: NSAppearance) -> NSColor {
+    var resolved = color
+    appearance.performAsCurrentDrawingAppearance {
+      resolved = color.usingColorSpace(.deviceRGB) ?? color
+    }
+    return resolved
+  }
+
+  static func cgColor(_ color: NSColor, for appearance: NSAppearance) -> CGColor {
+    resolved(color, for: appearance).cgColor
   }
 
   private static func dynamic(_ keyPath: KeyPath<TelepathySemanticPalette, NSColor>) -> NSColor {
@@ -123,7 +142,7 @@ enum TelepathySemantic {
 
   private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
     NSColor(name: nil) { appearance in
-      appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+      mode(for: appearance) == .dark ? dark : light
     }
   }
 }

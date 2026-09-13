@@ -26,11 +26,106 @@ final class TelepathyDesignSystemTests: XCTestCase {
     }
   }
 
+  func testSemanticColorsResolveAgainstTheRequestedAppearance() throws {
+    let lightAppearance = try XCTUnwrap(NSAppearance(named: .aqua))
+    let darkAppearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+    let resolvedLight = TelepathySemantic.resolved(
+      TelepathySemantic.surface,
+      for: lightAppearance
+    )
+    let resolvedDark = TelepathySemantic.resolved(
+      TelepathySemantic.surface,
+      for: darkAppearance
+    )
+
+    XCTAssertEqual(
+      AccentColor(color: resolvedLight),
+      AccentColor(color: TelepathySemantic.palette(for: .light).surface)
+    )
+    XCTAssertEqual(
+      AccentColor(color: resolvedDark),
+      AccentColor(color: TelepathySemantic.palette(for: .dark).surface)
+    )
+    XCTAssertEqual(TelepathySemantic.mode(for: lightAppearance), .light)
+    XCTAssertEqual(TelepathySemantic.mode(for: darkAppearance), .dark)
+  }
+
+  func testSentinelAccentRemainsLegibleInBothAppearances() {
+    let theme = AccentTheme.defaultValue
+
+    for mode in [TelepathySemantic.Mode.light, .dark] {
+      let accent = AccentColor(color: TelepathySemantic.panelAccent(for: theme, mode: mode))
+      let palette = TelepathySemantic.palette(for: mode)
+      let raised = AccentColor(color: palette.raised)
+      let surface = AccentColor(color: palette.surface)
+
+      XCTAssertGreaterThanOrEqual(accent.contrastRatio(against: raised), 3)
+      XCTAssertGreaterThanOrEqual(accent.contrastRatio(against: surface), 3)
+    }
+  }
+
+  func testSentinelTileRefreshesWhenAppearanceChanges() throws {
+    let logo = TelepathyLogoView(frame: NSRect(x: 0, y: 0, width: 38, height: 38))
+    let lightAppearance = try XCTUnwrap(NSAppearance(named: .aqua))
+    let darkAppearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+    logo.appearance = lightAppearance
+    logo.viewDidChangeEffectiveAppearance()
+    let lightBackground = try XCTUnwrap(logo.layer?.backgroundColor)
+
+    logo.appearance = darkAppearance
+    logo.viewDidChangeEffectiveAppearance()
+    let darkBackground = try XCTUnwrap(logo.layer?.backgroundColor)
+
+    XCTAssertEqual(
+      AccentColor(color: try XCTUnwrap(NSColor(cgColor: lightBackground))),
+      AccentColor(color: TelepathySemantic.palette(for: .light).raised)
+    )
+    XCTAssertEqual(
+      AccentColor(color: try XCTUnwrap(NSColor(cgColor: darkBackground))),
+      AccentColor(color: TelepathySemantic.palette(for: .dark).raised)
+    )
+  }
+
   func testStatusItemUsesTheSentinelMarkAsATemplateImage() {
     let image = TelepathyLogoView.statusItemImage()
 
     XCTAssertEqual(image.size, NSSize(width: 18, height: 18))
     XCTAssertTrue(image.isTemplate)
     XCTAssertEqual(image.accessibilityDescription, "Telepathy")
+  }
+
+  func testStatusItemMarkHasVisibleAlphaCoverage() throws {
+    let image = TelepathyLogoView.statusItemImage()
+    let representation = try XCTUnwrap(image.tiffRepresentation)
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: representation))
+    var visiblePixels = 0
+
+    for x in 0..<bitmap.pixelsWide {
+      for y in 0..<bitmap.pixelsHigh where bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.1 {
+        visiblePixels += 1
+      }
+    }
+
+    XCTAssertGreaterThan(visiblePixels, 80)
+  }
+
+  func testApplicationIconUsesTheSentinelMark() throws {
+    let image = TelepathyLogoView.applicationIconImage()
+    let representation = try XCTUnwrap(image.tiffRepresentation)
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: representation))
+    var visiblePixels = 0
+
+    for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+      for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8)
+      where bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.1 {
+        visiblePixels += 1
+      }
+    }
+
+    XCTAssertEqual(image.size, NSSize(width: 512, height: 512))
+    XCTAssertEqual(image.accessibilityDescription, "Telepathy")
+    XCTAssertGreaterThan(visiblePixels, 1_000)
   }
 }

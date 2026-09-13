@@ -1056,8 +1056,14 @@ private final class SettingsGroupView: NSView {
   }
 
   private func refreshAppearance() {
-    layer?.backgroundColor = TelepathySemantic.surface.cgColor
-    layer?.borderColor = TelepathySemantic.border.cgColor
+    layer?.backgroundColor = TelepathySemantic.cgColor(
+      TelepathySemantic.surface,
+      for: effectiveAppearance
+    )
+    layer?.borderColor = TelepathySemantic.cgColor(
+      TelepathySemantic.border,
+      for: effectiveAppearance
+    )
     layer?.borderWidth = TelepathyComponent.dividerWidth
     layer?.cornerRadius = TelepathyComponent.groupRadius
   }
@@ -1081,9 +1087,10 @@ private final class SidebarBackgroundView: NSView {
   }
 
   private func refreshAppearance() {
-    effectiveAppearance.performAsCurrentDrawingAppearance {
-      layer?.backgroundColor = TelepathySemantic.sidebar.cgColor
-    }
+    layer?.backgroundColor = TelepathySemantic.cgColor(
+      TelepathySemantic.sidebar,
+      for: effectiveAppearance
+    )
   }
 }
 
@@ -1105,15 +1112,27 @@ private final class SidebarDividerView: NSView {
   }
 
   private func refreshAppearance() {
-    layer?.backgroundColor = TelepathySemantic.border.cgColor
+    layer?.backgroundColor = TelepathySemantic.cgColor(
+      TelepathySemantic.border,
+      for: effectiveAppearance
+    )
   }
 }
 
 private final class StatusDotView: NSView {
-  var color = TelepathySemantic.secondaryText
+  var color = TelepathySemantic.secondaryText {
+    didSet { needsDisplay = true }
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    needsDisplay = true
+  }
 
   override func draw(_ dirtyRect: NSRect) {
-    color.setFill()
-    NSBezierPath(ovalIn: bounds).fill()
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      color.setFill()
+      NSBezierPath(ovalIn: bounds).fill()
+    }
   }
 }

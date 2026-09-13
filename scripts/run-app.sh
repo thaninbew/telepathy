@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-APP="${TELEPATHY_APP_PATH:-$HOME/Applications/Telepathy.app}"
+APP="$HOME/Applications/Telepathy.app"
 
 if [[ ! -d "$APP" ]]; then
   echo "Telepathy is not installed at $APP" >&2

@@ -15,9 +15,17 @@ swift test
 ./scripts/build-app.sh debug
 ```
 
-`./scripts/install-app.sh` installs an ad-hoc signed build in
-`~/Applications/Telepathy.app`. macOS may require Accessibility access again
-after a local replacement.
+Run `./scripts/setup-local-signing.sh` once before the first local installation.
+It creates a dedicated local code-signing identity in the login Keychain.
+`./scripts/install-app.sh` then updates the single canonical app at
+`~/Applications/Telepathy.app` with that stable identity so local rebuilds do
+not change its Accessibility identity. Development bundles use the separate
+`app.telepathy.macos.development` identifier.
+
+To remove the local identity later, open Keychain Access, search for **Telepathy
+Local Development**, and delete its certificate and private key. The next
+production installation will stop before replacing the app until another stable
+identity is configured.
 
 ## Change contract
 

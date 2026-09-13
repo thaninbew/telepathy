@@ -12,10 +12,9 @@ final class TelepathyLogoView: NSView {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    layer?.backgroundColor = TelepathySemantic.raised.cgColor
-    layer?.borderColor = TelepathySemantic.border.cgColor
     layer?.borderWidth = TelepathyComponent.dividerWidth
     layer?.cornerRadius = TelepathyComponent.iconRadius
+    refreshAppearance()
   }
 
   @available(*, unavailable)
@@ -25,8 +24,7 @@ final class TelepathyLogoView: NSView {
 
   override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
-    layer?.backgroundColor = TelepathySemantic.raised.cgColor
-    layer?.borderColor = TelepathySemantic.border.cgColor
+    refreshAppearance()
     needsDisplay = true
   }
 
@@ -39,7 +37,9 @@ final class TelepathyLogoView: NSView {
       width: markSize.width,
       height: markSize.height
     )
-    Self.drawSentinelMark(in: markRect, color: accentColor)
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      Self.drawSentinelMark(in: markRect, color: accentColor)
+    }
   }
 
   static func statusItemImage() -> NSImage {
@@ -51,6 +51,33 @@ final class TelepathyLogoView: NSView {
     image.isTemplate = true
     image.accessibilityDescription = "Telepathy"
     return image
+  }
+
+  static func applicationIconImage() -> NSImage {
+    let size = NSSize(width: 512, height: 512)
+    let image = NSImage(size: size, flipped: false) { rect in
+      let tileRect = rect.insetBy(dx: 32, dy: 32)
+      let tile = NSBezierPath(roundedRect: tileRect, xRadius: 112, yRadius: 112)
+      NSColor(calibratedRed: 0.075, green: 0.082, blue: 0.094, alpha: 1).setFill()
+      tile.fill()
+
+      let markRect = rect.insetBy(dx: 108, dy: 108)
+      drawSentinelMark(in: markRect, color: AccentColor.gold.nsColor)
+      return true
+    }
+    image.accessibilityDescription = "Telepathy"
+    return image
+  }
+
+  private func refreshAppearance() {
+    layer?.backgroundColor = TelepathySemantic.cgColor(
+      TelepathySemantic.raised,
+      for: effectiveAppearance
+    )
+    layer?.borderColor = TelepathySemantic.cgColor(
+      TelepathySemantic.border,
+      for: effectiveAppearance
+    )
   }
 
   private static func drawSentinelMark(in rect: NSRect, color: NSColor) {

@@ -29,12 +29,22 @@ Requirements: macOS 14 or newer and Xcode Command Line Tools.
 
 ```sh
 swift test
+./scripts/setup-local-signing.sh
 ./scripts/install-app.sh
 ```
 
 The installer opens `~/Applications/Telepathy.app`. Open the control window from
-the menu-bar eye. Telepathy never places permission messages over the desktop.
-Local ad-hoc updates may require granting Accessibility access again.
+the Dock, Spotlight, or the menu-bar Sentinel. Closing the control window leaves
+the utility running in the Dock and menu bar; use `Command-Q` or **Quit
+Telepathy** to stop it. Telepathy never places permission messages over the
+desktop.
+
+Run `./scripts/setup-local-signing.sh` once before the first local installation.
+The stable local signature lets future builds replace the same canonical app
+without changing its Accessibility identity. Development bundles are named
+**Telepathy Development**, use a separate bundle identifier, and never replace
+or launch as the installed production app. Telepathy also asks Launch Services
+to reject additional instances of the same bundle.
 
 Run **Full Calibration** after a new display arrangement. Its guided target
 captures natural posture variation, covers each display perimeter, then checks
@@ -71,7 +81,8 @@ Telepathy stops camera capture while Off, asleep, locked, untrusted, or unable
 to hand off between displays. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
 for the runtime budget and measurement procedure.
 
-For development, `./scripts/build-app.sh debug` produces `build/Telepathy.app`.
+For development, `./scripts/build-app.sh debug` produces
+`build/Telepathy Development.app`.
 The product contract and edge-case policy live in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 This is an early experiment, not assistive technology on which anyone should

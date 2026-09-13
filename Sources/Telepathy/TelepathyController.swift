@@ -839,11 +839,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
 
   private func configureStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    item.autosaveName = "Telepathy"
+    item.isVisible = true
     if let button = item.button {
       button.image = TelepathyLogoView.statusItemImage()
       button.imagePosition = .imageOnly
       button.imageScaling = .scaleProportionallyDown
-      button.contentTintColor = .labelColor
+      button.contentTintColor = nil
+      button.alphaValue = enabled ? 1 : 0.55
       button.toolTip = "Telepathy"
     }
     let menu = NSMenu(title: "Telepathy")
@@ -868,7 +871,8 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     if let button = statusItem?.button {
       button.image = TelepathyLogoView.statusItemImage()
       button.image?.accessibilityDescription = enabled ? "Telepathy on" : "Telepathy off"
-      button.contentTintColor = enabled ? .labelColor : .secondaryLabelColor
+      button.contentTintColor = nil
+      button.alphaValue = enabled ? 1 : 0.55
       button.toolTip = enabled ? "Telepathy is on" : "Telepathy is off"
     }
 
@@ -1339,6 +1343,10 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   }
 
   @objc private func openControlPanel() {
+    presentControlPanel()
+  }
+
+  func presentControlPanel() {
     controlPanel.present()
   }
 
