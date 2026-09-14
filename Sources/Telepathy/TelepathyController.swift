@@ -180,6 +180,14 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     }
   }
 
+  private var appPresenceMode: AppPresenceMode {
+    didSet {
+      UserDefaults.standard.set(appPresenceMode.rawValue, forKey: AppPresenceMode.defaultsKey)
+      statusItem?.isVisible = appPresenceMode.showsMenuBarItem
+      refreshControlPanel()
+    }
+  }
+
   private var resolvedAccent: AccentColor {
     accentTheme.resolved()
   }
@@ -219,6 +227,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       defaults.data(forKey: DefaultsKey.accentTheme).flatMap {
         try? JSONDecoder().decode(AccentTheme.self, from: $0)
       } ?? .defaultValue
+    appPresenceMode = AppPresenceMode.stored(in: defaults)
     super.init()
     if migratedLegacyShortcut {
       defaults.set(shortcut.keyCode, forKey: DefaultsKey.shortcutKeyCode)
@@ -681,6 +690,9 @@ final class TelepathyController: NSObject, NSMenuDelegate {
       guard let self, self.accentTheme.customColor != color else { return }
       self.accentTheme.customColor = color
     }
+    controlPanel.onAppPresenceChanged = { [weak self] mode in
+      self?.changeAppPresence(to: mode) ?? false
+    }
     controlPanel.onRequestAccessibility = { [weak self] in
       self?.requestAccessibility()
     }
@@ -840,7 +852,7 @@ final class TelepathyController: NSObject, NSMenuDelegate {
   private func configureStatusItem() {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     item.autosaveName = "Telepathy"
-    item.isVisible = true
+    item.isVisible = appPresenceMode.showsMenuBarItem
     if let button = item.button {
       button.image = TelepathyLogoView.statusItemImage()
       button.imagePosition = .imageOnly
@@ -1160,7 +1172,15 @@ final class TelepathyController: NSObject, NSMenuDelegate {
     state.accentTheme = accentTheme
     state.resolvedAccent = resolvedAccent
     state.quickRecenterEnabled = trackingReady && calibrationEnabled
+    state.appPresenceMode = appPresenceMode
     controlPanel.update(state)
+  }
+
+  private func changeAppPresence(to mode: AppPresenceMode) -> Bool {
+    guard appPresenceMode != mode else { return true }
+    guard NSApplication.shared.setActivationPolicy(mode.activationPolicy) else { return false }
+    appPresenceMode = mode
+    return true
   }
 
   private var statusText: String {
