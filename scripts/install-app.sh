@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOURCE="$ROOT/build/Telepathy Development.app"
+SOURCE="$ROOT/build/Telepathy Development.noindex/Telepathy Development.app"
 DESTINATION="$HOME/Applications/Telepathy.app"
 STAGING="${DESTINATION}.installing"
 DEFAULT_SIGNING_IDENTITY="Telepathy Local Development"
