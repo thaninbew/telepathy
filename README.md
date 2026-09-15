@@ -82,7 +82,9 @@ to hand off between displays. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
 for the runtime budget and measurement procedure.
 
 For development, `./scripts/build-app.sh debug` produces
-`build/Telepathy Development.app`.
+`build/Telepathy Development.noindex/Telepathy Development.app`. The
+`.noindex` container keeps this separate development identity out of Spotlight
+so it is not mistaken for the canonical signed app.
 The product contract and edge-case policy live in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 This is an early experiment, not assistive technology on which anyone should

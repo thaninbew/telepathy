@@ -16,7 +16,9 @@ jobs:
         run: ./scripts/build-app.sh release
       - name: Verify development bundle identity
         run: |
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' 'build/Telepathy Development.app/Contents/Info.plist')" = "app.telepathy.macos.development"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' 'build/Telepathy Development.app/Contents/Info.plist')" = "Telepathy Development"
-          ! /usr/libexec/PlistBuddy -c 'Print :LSUIElement' 'build/Telepathy Development.app/Contents/Info.plist'
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' 'build/Telepathy Development.app/Contents/Info.plist')" = "true"
+          test -f 'build/Telepathy Development.noindex/.metadata_never_index'
+          app='build/Telepathy Development.noindex/Telepathy Development.app'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "app.telepathy.macos.development"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$app/Contents/Info.plist")" = "Telepathy Development"
+          ! /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$app/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$app/Contents/Info.plist")" = "true"
