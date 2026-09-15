@@ -6,10 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     configureApplicationMenu()
-    NSApplication.shared.setActivationPolicy(.regular)
+    applyStoredPresence()
     NSApplication.shared.applicationIconImage = TelepathyLogoView.applicationIconImage()
     controller.start()
     controller.presentControlPanel()
+    applyStoredPresence()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -21,7 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     hasVisibleWindows flag: Bool
   ) -> Bool {
     controller.presentControlPanel()
+    applyStoredPresence()
     return false
+  }
+
+  private func applyStoredPresence() {
+    NSApplication.shared.setActivationPolicy(AppPresenceMode.stored().activationPolicy)
   }
 
   private func configureApplicationMenu() {

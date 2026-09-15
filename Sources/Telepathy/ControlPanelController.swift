@@ -17,6 +17,7 @@ struct ControlPanelState: Equatable {
   var accentTheme: AccentTheme = .defaultValue
   var resolvedAccent: AccentColor = .gold
   var quickRecenterEnabled: Bool = false
+  var appPresenceMode: AppPresenceMode = .standard
 }
 
 @MainActor
@@ -25,12 +26,14 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     case focus
     case calibration
     case feedback
+    case app
 
     var title: String {
       switch self {
       case .focus: "Focus"
       case .calibration: "Calibration"
       case .feedback: "Feedback"
+      case .app: "App"
       }
     }
 
@@ -39,6 +42,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       case .focus: "eye"
       case .calibration: "scope"
       case .feedback: "sparkles"
+      case .app: "macwindow"
       }
     }
   }
@@ -53,6 +57,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   var onAutoReturnChanged: ((TimeInterval) -> Void)?
   var onAccentSourceChanged: ((AccentThemeSource) -> Void)?
   var onCustomAccentChanged: ((AccentColor) -> Void)?
+  var onAppPresenceChanged: ((AppPresenceMode) -> Bool)?
   var onCalibrate: (() -> Void)?
   var onQuickRecenter: (() -> Void)?
   var onRequestAccessibility: (() -> Void)?
@@ -68,6 +73,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
   private let autoReturnPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let accentSourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let accentColorWell = NSColorWell()
+  private let appPresencePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let appPresenceDetail = NSTextField(wrappingLabelWithString: "")
   private let logoView = TelepathyLogoView()
   private let sourceList = NSTableView()
   private let tabView = NSTabView()
@@ -157,6 +164,8 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     accentColorWell.color = state.accentTheme.customColor.nsColor
     accentColorWell.isEnabled = state.accentTheme.source == .custom
     accentColorWell.isHidden = state.accentTheme.source != .custom
+    selectAppPresenceMode(state.appPresenceMode)
+    appPresenceDetail.stringValue = state.appPresenceMode.detail
     applyAccent(TelepathySemantic.panelAccent(for: state.accentTheme))
     statusLabel.stringValue = state.status
     sidebarStatusLabel.stringValue = state.enabled ? state.status : "Paused"
@@ -306,6 +315,7 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       (.focus, makeFocusPage()),
       (.calibration, makeCalibrationPage()),
       (.feedback, makeFeedbackPage()),
+      (.app, makeAppPage()),
     ]
     for (page, view) in pages {
       let item = NSTabViewItem(identifier: page)
@@ -385,6 +395,14 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     if #available(macOS 13.0, *) {
       accentColorWell.colorWellStyle = .minimal
     }
+
+    for mode in AppPresenceMode.allCases {
+      appPresencePopup.addItem(withTitle: mode.title)
+      appPresencePopup.lastItem?.representedObject = mode.rawValue
+    }
+    appPresencePopup.target = self
+    appPresencePopup.action = #selector(appPresenceChanged)
+    appPresencePopup.setAccessibilityLabel("Where Telepathy appears")
   }
 
   private func makeFocusPage() -> NSView {
@@ -525,6 +543,37 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       detail: "Keep confirmation visible, brief, and quiet.",
       trailing: nil,
       sections: [group]
+    )
+  }
+
+  private func makeAppPage() -> NSView {
+    let titleLabel = makeLabel(
+      "Presence",
+      font: TelepathyComponent.rowTitleFont,
+      color: TelepathySemantic.text
+    )
+    appPresenceDetail.font = TelepathyComponent.rowDetailFont
+    appPresenceDetail.textColor = TelepathySemantic.secondaryText
+    appPresenceDetail.maximumNumberOfLines = 2
+    appPresenceDetail.stringValue = AppPresenceMode.standard.detail
+
+    let labels = NSStackView(views: [titleLabel, appPresenceDetail])
+    labels.orientation = .vertical
+    labels.alignment = .leading
+    labels.spacing = TelepathyPrimitive.Space.x1
+
+    appPresencePopup.setContentHuggingPriority(.required, for: .horizontal)
+    let row = NSStackView(views: [labels, appPresencePopup])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.distribution = .fill
+    row.spacing = TelepathyComponent.rowGap
+
+    return makePage(
+      title: "App",
+      detail: "Choose where Telepathy stays visible while it runs.",
+      trailing: nil,
+      sections: [makeSettingsGroup(rows: [makeContainedRow(row)])]
     )
   }
 
@@ -841,6 +890,16 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
     onCustomAccentChanged?(AccentColor(color: accentColorWell.color))
   }
 
+  @objc private func appPresenceChanged() {
+    guard let rawValue = appPresencePopup.selectedItem?.representedObject as? String,
+      let mode = AppPresenceMode(rawValue: rawValue)
+    else { return }
+    let accepted = onAppPresenceChanged?(mode) ?? false
+    let displayedMode = accepted ? mode : currentState?.appPresenceMode ?? .standard
+    selectAppPresenceMode(displayedMode)
+    appPresenceDetail.stringValue = displayedMode.detail
+  }
+
   private func finishShortcutRecording(with binding: ShortcutBinding?) {
     if let shortcutMonitor {
       NSEvent.removeMonitor(shortcutMonitor)
@@ -906,6 +965,15 @@ final class ControlPanelController: NSWindowController, NSWindowDelegate {
       })
     else { return }
     accentSourcePopup.selectItem(at: index)
+  }
+
+  private func selectAppPresenceMode(_ mode: AppPresenceMode) {
+    guard
+      let index = appPresencePopup.itemArray.firstIndex(where: {
+        ($0.representedObject as? String) == mode.rawValue
+      })
+    else { return }
+    appPresencePopup.selectItem(at: index)
   }
 
   private func applyAccent(_ accent: NSColor) {

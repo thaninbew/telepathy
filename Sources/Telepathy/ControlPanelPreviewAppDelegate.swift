@@ -5,7 +5,10 @@ final class ControlPanelPreviewAppDelegate: NSObject, NSApplicationDelegate {
   private let panel = ControlPanelController()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApplication.shared.setActivationPolicy(.regular)
+    let presenceMode =
+      ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_PRESENCE"]
+      .flatMap(AppPresenceMode.init(rawValue:)) ?? .standard
+    NSApplication.shared.setActivationPolicy(presenceMode.activationPolicy)
     switch ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_APPEARANCE"] {
     case "light":
       panel.window?.appearance = NSAppearance(named: .aqua)
@@ -34,6 +37,10 @@ final class ControlPanelPreviewAppDelegate: NSObject, NSApplicationDelegate {
     state.accentTheme = AccentTheme(source: .system, customColor: .gold)
     state.resolvedAccent = AccentColor(color: .controlAccentColor)
     state.quickRecenterEnabled = true
+    state.appPresenceMode = presenceMode
+    panel.onAppPresenceChanged = { mode in
+      NSApplication.shared.setActivationPolicy(mode.activationPolicy)
+    }
     panel.update(state)
     if let rawPage = ProcessInfo.processInfo.environment["TELEPATHY_UI_PREVIEW_PAGE"],
       let page = Int(rawPage)
